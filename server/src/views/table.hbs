@@ -1,0 +1,35 @@
+<table>
+  <thead>
+    <tr>
+      <th></th>
+      <th>Club</th>
+      <th>MP</th>
+      <th>W</th>
+      <th>D</th>
+      <th>L</th>
+      <th>GF</th>
+      <th>GA</th>
+      <th>GD</th>
+      <th>Pts</th>
+    </tr>
+  </thead>
+  <tbody>
+    {{#each standingsData}}
+    <tr>
+      <td>{{this.position}}</td>
+      <td>
+        <img src="{{this.logo}}" alt="{{this.name}}" width="20" height="20" />
+        {{this.name}}
+      </td>
+      <td data-label="MP">{{this.played}}</td>
+      <td data-label="W">{{this.won}}</td>
+      <td data-label="D">{{this.draw}}</td>
+      <td data-label="L">{{this.lost}}</td>
+      <td data-label="GF">{{this.goalsScored}}</td>
+      <td data-label="GA">{{this.goalsAgainst}}</td>
+      <td data-label="GD">{{this.goalDiff}}</td>
+      <td data-label="Pts">{{this.points}}</td>
+    </tr>
+    {{/each}}
+  </tbody>
+</table>
