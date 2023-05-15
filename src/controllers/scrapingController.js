@@ -2,9 +2,9 @@ const https = require("https");
 const cheerio = require("cheerio");
 const { dataUrl } = require("../config/config");
 const Team = require("../models/Team");
-const getStandingsData = require("../services/getStandingsData");
+const scrapingService = require("../services/scrapingService");
 
-const scrapingControler = (req, res) => {
+const scrapingController = (req, res) => {
   console.log('Scraping service started successfully')
   https
     .get(dataUrl, async (response) => {
@@ -18,7 +18,7 @@ const scrapingControler = (req, res) => {
         const $ = cheerio.load(data);
         const positionsTable = $("#p_score_contenido_TorneoTabs_collapse3");
 
-        await getStandingsData(positionsTable.html());
+        await scrapingService(positionsTable.html());
       });
     })
     .on("error", (err) => {
@@ -27,4 +27,4 @@ const scrapingControler = (req, res) => {
     });
 };
 
-module.exports = scrapingControler;
+module.exports = scrapingController;

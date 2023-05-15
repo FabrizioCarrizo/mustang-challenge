@@ -11,6 +11,7 @@ const teamSchema= new Schema({
     goalsScored:Number,
     goalsAgainst:Number,
     goalDiff: Number,
+    points: Number,
 
 
  
