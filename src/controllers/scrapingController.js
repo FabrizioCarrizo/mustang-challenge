@@ -1,11 +1,10 @@
 const https = require("https");
 const cheerio = require("cheerio");
 const { dataUrl } = require("../config/config");
-const Team = require("../models/Team");
 const scrapingService = require("../services/scrapingService");
 
 const scrapingController = (req, res) => {
-  console.log('Scraping service started successfully')
+  console.log("Scraping service started successfully");
   https
     .get(dataUrl, async (response) => {
       let data = "";

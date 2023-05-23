@@ -4,11 +4,12 @@ const Team = require("../models/Team");
 const scrapingService = async (table) => {
   const $ = cheerio.load(table);
 
-  $("tr").each(async (i, el) => {
+  const bulkOperations = [];
+
+  $("tr").each((i, el) => {
     if (i === 0) return;
 
     const position = parseInt($(el).find("td").eq(0).text());
-
     const logo = $(el).find("td").eq(1).find("img").attr("data-src");
     const name = $(el).find("td").eq(1).find("span").first().text();
     const played = parseInt($(el).find("td").eq(2).text());
@@ -20,34 +21,37 @@ const scrapingService = async (table) => {
     const goalDiff = parseInt($(el).find("td").eq(8).text().trim());
     const points = parseInt($(el).find("td").eq(9).text());
 
-    try {
-      const doc = await Team.findOne({ name: name });
+    const update = {
+      position,
+      logo,
+      name,
+      played,
+      won,
+      draw,
+      lost,
+      goalsScored,
+      goalsAgainst,
+      goalDiff,
+      points,
+    };
 
-      if (!doc || doc.played != played || doc.position != position) {
-        await Team.findOneAndUpdate(
-          { name: name },
-          {
-            position,
-            logo,
-            name,
-            played,
-            won,
-            draw,
-            lost,
-            goalsScored,
-            goalsAgainst,
-            goalDiff,
-            points,
-          },
-          { upsert: true }
-        ).then(() => console.log("Data successfully updated"));
-      }
-    } catch (error) {
-      console.error(error);
-    }
+    const filter = { name };
+
+    bulkOperations.push({
+      updateOne: {
+        filter,
+        update,
+        upsert: true,
+      },
+    });
   });
 
-  return;
+  try {
+    await Team.bulkWrite(bulkOperations);
+    console.log("Data successfully updated");
+  } catch (error) {
+    console.error("Error updating data:", error);
+  }
 };
 
 module.exports = scrapingService;

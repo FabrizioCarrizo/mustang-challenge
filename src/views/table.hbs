@@ -1,3 +1,21 @@
+{{#section 'head'}}
+  <meta name="description" content="Mirá la tabla de posiciones más reciente de la Primera División. Mantenete actualizado con las posiciones de los equipos, victorias, derrotas y puntos." />
+  <meta name="keywords" content="football, Argentina, River, Boca, Primera División, standings, league, rankings, points, wins, losses" />
+  <meta name="author" content="Fabrizio Carrizo" />
+  <meta property="og:title" content="Tabla de la Primera División Argentina" />
+  <meta property="og:description" content="Mirá la tabla de posiciones más reciente de la Primera División. Mantenete actualizado con las posiciones de los equipos, victorias, derrotas y puntos." />
+  <meta property="og:image" content="https://upload.wikimedia.org/wikipedia/commons/5/5c/Logo_Liga_Profesional_de_F%C3%BAtbol_%28Argentina%29.png" />
+  <meta property="og:url" content="https://mustang-challenge-production.up.railway.app/" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Tabla de la Primera División Argentina" />
+  <meta name="twitter:description" content="Mirá la tabla de posiciones más reciente de la Primera División. Mantenete actualizado con las posiciones de los equipos, victorias, derrotas y puntos." />
+  <meta name="twitter:image" content="https://upload.wikimedia.org/wikipedia/commons/5/5c/Logo_Liga_Profesional_de_F%C3%BAtbol_%28Argentina%29.png" />
+  <meta name="robots" content="noindex">
+  <link rel="canonical" href="https://mustang-challenge-production.up.railway.app/" />
+  <title>Tabla de la Primera División del Fútbol Argentino</title>
+{{/section}}
+
+<h1>Primera División Argentina</h1>
 <table>
   <thead>
     <tr>
@@ -15,10 +33,11 @@
   </thead>
   <tbody>
     {{#each standingsData}}
-    <tr>
+     {{#colorTableRow @index 28}}
+    
       <td>{{this.position}}</td>
       <td>
-        <img src="{{this.logo}}" alt="{{this.name}}" width="20" height="20" />
+        <img src="{{this.logo}}" alt="{{this.name}}" title="{{this.name}}" width="20" height="20" />
         {{this.name}}
       </td>
       <td data-label="MP">{{this.played}}</td>
@@ -29,7 +48,13 @@
       <td data-label="GA">{{this.goalsAgainst}}</td>
       <td data-label="GD">{{this.goalDiff}}</td>
       <td data-label="Pts">{{this.points}}</td>
-    </tr>
+     {{/colorTableRow}}
+
     {{/each}}
   </tbody>
 </table>
+
+<div class="container">
+      <p class="green">Clasifican a copa</p>
+      <p class="red">Juegan el descenso</p>
+    </div>
