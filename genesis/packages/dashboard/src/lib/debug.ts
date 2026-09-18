@@ -11,7 +11,9 @@ export interface GenesisDebugHook {
   /** centra el mapa en una celda (con zoom) */
   panTo(x: number, y: number): void;
   setCamera(camera: { x: number; y: number; scale: number }): void;
-  getState(): { tick: number; agents: number; ready: boolean; connection: string };
+  /** viaja a un tick del pasado (o `null` para volver al presente) */
+  replay(toTick: number | null): void;
+  getState(): { tick: number; liveTick: number; agents: number; ready: boolean; connection: string; replayTick: number | null; replayPending: number | null; groups: number };
 }
 
 declare global {
@@ -29,9 +31,19 @@ export function installDebugHook(): void {
     fit: () => mapController.fit(),
     panTo: (x, y) => useUiStore.getState().panTo(x, y),
     setCamera: (camera) => useUiStore.getState().setCamera(camera),
+    replay: (toTick) => useWorldStore.getState().requestReplay(toTick),
     getState: () => {
       const s = useWorldStore.getState();
-      return { tick: s.tick, agents: s.agents.size, ready: s.ready, connection: s.connection };
+      return {
+        tick: s.tick,
+        liveTick: s.liveTick,
+        agents: s.agents.size,
+        ready: s.ready,
+        connection: s.connection,
+        replayTick: s.replayTick,
+        replayPending: s.replayPending,
+        groups: s.groups.length,
+      };
     },
   };
 }

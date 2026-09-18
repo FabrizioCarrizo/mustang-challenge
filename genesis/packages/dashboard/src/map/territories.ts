@@ -34,20 +34,37 @@ export function convexHull(points: Pt[]): Pt[] {
   return lower.concat(upper);
 }
 
+/** Un miembro más lejos que esto del hogar anda de viaje: no estira el territorio. */
+const HOME_RADIUS = 16;
+
 /**
  * Territorio aproximado de cada tribu: el cierre convexo de las posiciones de
- * sus miembros vivos (más adelante el servidor podrá mandar territorios reales).
+ * los miembros vivos cercanos al hogar (o a la mediana del grupo si no hay
+ * hogar), para que un explorador lejano no estire el polígono por todo el mapa.
  */
 export function computeTerritories(groups: GroupInfo[], agents: Map<number, AgentSummary>): Territory[] {
   const out: Territory[] = [];
   for (const g of groups) {
-    const pts: Pt[] = [];
+    const all: Pt[] = [];
     for (const id of g.members) {
       const a = agents.get(id);
-      if (a && a.alive) pts.push([a.x + 0.5, a.y + 0.5]);
+      if (a && a.alive) all.push([a.x + 0.5, a.y + 0.5]);
     }
-    if (g.home) pts.push([g.home.x + 0.5, g.home.y + 0.5]);
-    if (pts.length < 3) continue;
+    if (all.length === 0) continue;
+    let anchor: Pt;
+    if (g.home) anchor = [g.home.x + 0.5, g.home.y + 0.5];
+    else {
+      const xs = all.map((p) => p[0]).sort((a, b) => a - b);
+      const ys = all.map((p) => p[1]).sort((a, b) => a - b);
+      anchor = [xs[Math.floor(xs.length / 2)]!, ys[Math.floor(ys.length / 2)]!];
+    }
+    const pts = all.filter((p) => Math.hypot(p[0] - anchor[0], p[1] - anchor[1]) <= HOME_RADIUS);
+    pts.push(anchor);
+    // un hogar con pocos vecinos igual merece un pequeño claro alrededor
+    if (pts.length < 3) {
+      const r = 2.5;
+      pts.push([anchor[0] - r, anchor[1] - r], [anchor[0] + r, anchor[1] - r], [anchor[0] + r, anchor[1] + r], [anchor[0] - r, anchor[1] + r]);
+    }
     const hull = convexHull(pts);
     if (hull.length < 3) continue;
     let cx = 0;

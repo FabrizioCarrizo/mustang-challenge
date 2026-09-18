@@ -5,7 +5,8 @@ import { WEATHER_LABELS } from "../lib/labels.ts";
 import { formatClock } from "../lib/time.ts";
 import { socket } from "../lib/ws.ts";
 import { type ThemeMode, useUiStore } from "../store/uiStore.ts";
-import { countAlive, useWorldStore } from "../store/worldStore.ts";
+import { countAlive, isReplaying, useWorldStore } from "../store/worldStore.ts";
+import { NoticeList } from "./NoticeList.tsx";
 
 const SPEEDS: Array<{ value: number; label: string }> = [
   { value: 0.25, label: "0.25×" },
@@ -22,7 +23,7 @@ export function sendControl(action: "pause" | "play" | "speed" | "preset", value
 }
 
 export function TopBar() {
-  const { world, clock, climate, epoch, budget, pacing, connection, attempt, ready } = useWorldStore(
+  const { world, clock, climate, epoch, budget, pacing, connection, attempt, ready, replaying } = useWorldStore(
     useShallow((s) => ({
       world: s.world,
       clock: s.clock,
@@ -33,6 +34,7 @@ export function TopBar() {
       connection: s.connection,
       attempt: s.reconnectAttempt,
       ready: s.ready,
+      replaying: isReplaying(s),
     })),
   );
   const agentsVersion = useWorldStore((s) => s.agentsVersion);
@@ -54,14 +56,14 @@ export function TopBar() {
           {world?.name ?? "…"}
         </span>
         {epoch && (
-          <span className="brand__epoch" title="época">
+          <span className="brand__epoch" title={`época: ${epoch}`}>
             {epoch}
           </span>
         )}
       </div>
 
       <div className="topbar__group topbar__clock">
-        <span className="clock num" data-testid="clock">
+        <span className={`clock num${replaying ? " clock--past" : ""}`} data-testid="clock" title={replaying ? "momento del pasado que se está viendo" : undefined}>
           {clock ? formatClock(clock) : "—"}
         </span>
         {climate && weather && (
@@ -74,10 +76,11 @@ export function TopBar() {
         </span>
       </div>
 
-      <div className="topbar__group topbar__controls">
+      <div className="topbar__group topbar__controls" title={replaying ? "el ritmo no se toca mientras se mira el pasado" : undefined}>
         <button
           className={`btn btn--icon${paused ? " btn--play" : ""}`}
           onClick={() => sendControl(paused ? "play" : "pause")}
+          disabled={replaying}
           title={paused ? "reanudar (espacio)" : "pausar (espacio)"}
           aria-label={paused ? "reanudar" : "pausar"}
           data-testid="pause-toggle"
@@ -90,13 +93,14 @@ export function TopBar() {
               key={s.label}
               className={`btn btn--seg${!paused && multiplier === s.value ? " btn--active" : ""}`}
               onClick={() => sendControl("speed", s.value)}
+              disabled={replaying}
               title={s.value === 0 ? "máxima velocidad" : `velocidad ${s.label}`}
             >
               {s.label}
             </button>
           ))}
         </div>
-        <select className="select" value={pacing?.preset ?? "cronica"} onChange={(e) => sendControl("preset", e.target.value)} title="preset de ritmo" aria-label="preset">
+        <select className="select" value={pacing?.preset ?? "cronica"} onChange={(e) => sendControl("preset", e.target.value)} disabled={replaying} title="preset de ritmo" aria-label="preset">
           {PRESETS.concat(pacing && !PRESETS.includes(pacing.preset) ? [pacing.preset] : []).map((p) => (
             <option key={p} value={p}>
               {p}
@@ -116,6 +120,7 @@ export function TopBar() {
             {connection === "connecting" ? "conectando…" : `desconectado · reintento ${attempt}`}
           </span>
         )}
+        <Bell />
         <button
           className="btn btn--sm btn--ghost btn--icon"
           onClick={() => setTheme(nextTheme(theme))}
@@ -129,6 +134,33 @@ export function TopBar() {
         </button>
       </div>
     </header>
+  );
+}
+
+/** Campana con los últimos avisos del servidor. */
+function Bell() {
+  const open = useUiStore((s) => s.noticesOpen);
+  const unread = useUiStore((s) => s.unreadNotices);
+  const toggle = useUiStore((s) => s.toggleNotices);
+  return (
+    <div className="bell">
+      <button type="button" className={`btn btn--sm btn--ghost bell__btn${open ? " btn--active" : ""}`} onClick={() => toggle()} aria-expanded={open} title="avisos del servidor" aria-label="avisos del servidor" data-testid="bell">
+        <span aria-hidden>⚑</span>
+        <span className="bell__label">avisos</span>
+        {unread > 0 && <span className="bell__count num">{unread}</span>}
+      </button>
+      {open && (
+        <div className="bell__pop" data-testid="notice-log">
+          <div className="bell__head">
+            <strong>Últimos avisos</strong>
+            <button type="button" className="btn btn--xs btn--ghost" onClick={() => toggle(false)} aria-label="cerrar">
+              ✕
+            </button>
+          </div>
+          <NoticeList />
+        </div>
+      )}
+    </div>
   );
 }
 

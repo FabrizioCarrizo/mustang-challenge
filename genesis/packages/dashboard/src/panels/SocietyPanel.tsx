@@ -1,28 +1,61 @@
 import type { BeliefInfo, EconomyInfo, GroupInfo, LawInfo, TechInfo, TextInfo } from "@genesis/protocol";
-import { type ReactNode, useState } from "react";
-import { AgentLink, Chip, Empty, GenericValue, KeyValue, Loading, Section } from "../components/ui.tsx";
+import { type ReactNode, useEffect, useState } from "react";
+import { AgentLink, Chip, Empty, KeyValue, Loading, Section } from "../components/ui.tsx";
 import { type ApiResult, useApi } from "../lib/api.ts";
 import { fmtNum } from "../lib/format.ts";
 import { formatTickLong } from "../lib/time.ts";
 import { useUiStore } from "../store/uiStore.ts";
 import { agentName, useWorldStore } from "../store/worldStore.ts";
 
+const REFRESH_MS = 30_000;
+
+/** /api/society/leaders */
+interface LeaderInfo {
+  groupId: number;
+  groupName: string;
+  leaderId: number | null;
+  leaderName: string;
+  members: number;
+}
+
+/** /api/society/crimes */
+interface CrimeInfo {
+  id: number;
+  tick: number;
+  criminalId: number;
+  criminalName: string;
+  victimId: number | null;
+  victimName: string | null;
+  verb: string;
+  punished: boolean;
+  lawId: number | null;
+  groupId: number | null;
+}
+
+const MEDIUM_LABELS: Record<string, string> = { oral: "oral", tallado: "tallado", escrito: "escrito", objeto: "objeto" };
+
 export function SocietyPanel() {
   const [nonce, setNonce] = useState(0);
+  useEffect(() => {
+    const id = window.setInterval(() => setNonce((n) => n + 1), REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, []);
   return (
     <div className="society" key={nonce}>
       <div className="toolbar toolbar--right">
+        <span className="muted small">se actualiza cada 30 s</span>
         <button type="button" className="btn btn--sm btn--ghost" onClick={() => setNonce((n) => n + 1)}>
           actualizar todo
         </button>
       </div>
       <GroupsSection />
-      <RemoteSection<unknown> path="/society/leaders" title="Líderes" empty="Todavía no hay líderes: nadie se impuso ni fue elegido." render={(data) => <GenericValue value={data} />} />
+      <RemoteSection<LeaderInfo[]> path="/society/leaders" title="Líderes" empty="Todavía no hay líderes: nadie se impuso ni fue elegido." render={(list) => <Leaders list={list} />} />
       <RemoteSection<EconomyInfo> path="/society/economy" title="Economía" empty="Todavía no hay economía: solo trueque disperso." render={(e) => <Economy e={e} />} />
       <RemoteSection<BeliefInfo[]> path="/society/beliefs" title="Creencias" empty="Todavía no hay creencias compartidas." render={(list) => <Beliefs list={list} />} />
       <RemoteSection<TechInfo[]> path="/society/tech" title="Tecnología" empty="Todavía no descubrieron ninguna técnica." render={(list) => <Techs list={list} />} />
-      <RemoteSection<TextInfo[]> path="/society/texts" title="Textos" empty="Todavía nadie escribió nada." render={(list) => <Texts list={list} />} />
+      <RemoteSection<TextInfo[]> path="/society/texts?limit=60" title="Textos" empty="Todavía nadie escribió nada." render={(list) => <Texts list={list} />} />
       <RemoteSection<LawInfo[]> path="/society/laws" title="Leyes" empty="Todavía no hay leyes declaradas." render={(list) => <Laws list={list} />} />
+      <RemoteSection<CrimeInfo[]> path="/society/crimes" title="Crímenes" empty="Nadie rompió una ley todavía." render={(list) => <Crimes list={list} />} />
     </div>
   );
 }
@@ -37,7 +70,7 @@ function stateOf<T>(res: ApiResult<T>, empty: string): { node: ReactNode } | nul
   return null;
 }
 
-/** Sección que lee una ruta futura de /api/society/* y degrada con calma si no existe. */
+/** Sección que lee una ruta de /api/society/* y degrada con calma si no existe o está vacía. */
 function RemoteSection<T>({ path, title, empty, render }: { path: string; title: string; empty: string; render: (data: T) => ReactNode }) {
   const res = useApi<T>(path);
   const s = stateOf(res, empty);
@@ -68,9 +101,9 @@ function GroupsSection() {
     body = res.status === "loading" && !groups.length && res.data === undefined ? <Loading /> : <Empty>Todavía no hay tribus: cada ser anda por su cuenta.</Empty>;
   } else {
     body = (
-      <ul className="list groups">
+      <ul className="list groups" data-testid="groups">
         {list.map((g) => (
-          <li key={g.id} className="group">
+          <li key={g.id} className="group" style={{ borderLeftColor: g.color }}>
             <div className="group__head">
               <span className="swatch swatch--lg" style={{ background: g.color }} />
               <strong>{g.name}</strong>
@@ -98,12 +131,28 @@ function GroupsSection() {
   return <Section title="Tribus">{body}</Section>;
 }
 
+function Leaders({ list }: { list: LeaderInfo[] }) {
+  const colors = useWorldStore((s) => s.groupColors);
+  return (
+    <ul className="list list--dense">
+      {list.map((l) => (
+        <li key={l.groupId} className="leader">
+          <span className="swatch" style={{ background: colors.get(l.groupId) ?? "var(--muted)" }} />
+          <AgentLink id={l.leaderId} name={l.leaderName} /> <span className="muted">lidera</span> <strong>{l.groupName}</strong>{" "}
+          <span className="muted num">({l.members} miembros)</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Economy({ e }: { e: EconomyInfo }) {
+  const tpd = useWorldStore((s) => s.world?.ticksPerDay ?? 144);
   return (
     <div>
       <KeyValue
         items={[
-          ["moneda", e.currency ?? "ninguna todavía"],
+          ["moneda", e.currency ? `${e.currency}${e.currencySinceTick !== null ? ` (desde ${formatTickLong(e.currencySinceTick, tpd)})` : ""}` : "ninguna todavía"],
           ["índice de precios", fmtNum(e.cpi, 2)],
           ["gini", fmtNum(e.gini, 3)],
           ["trueques (7 días)", fmtNum(e.tradesLast7Days)],
@@ -120,28 +169,33 @@ function Economy({ e }: { e: EconomyInfo }) {
         </div>
       )}
       {e.topHolders.length > 0 && (
-        <ul className="list list--dense">
-          {e.topHolders.map((h) => (
-            <li key={h.id}>
-              <AgentLink id={h.id} name={h.name} /> <span className="muted num">{fmtNum(h.wealth, 1)}</span>
-            </li>
-          ))}
-        </ul>
+        <>
+          <h4 className="section__title">Los más ricos</h4>
+          <ul className="list list--dense">
+            {e.topHolders.map((h) => (
+              <li key={h.id}>
+                <AgentLink id={h.id} name={h.name} /> <span className="muted num">{fmtNum(h.wealth, 1)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );
 }
 
 function Beliefs({ list }: { list: BeliefInfo[] }) {
+  const tpd = useWorldStore((s) => s.world?.ticksPerDay ?? 144);
+  const sorted = list.slice().sort((a, b) => Number(b.religion) - Number(a.religion) || b.adherents - a.adherents);
   return (
     <ul className="list">
-      {list.map((b) => (
-        <li key={b.id} className="belief">
+      {sorted.map((b) => (
+        <li key={b.id} className={`belief${b.religion ? " belief--religion" : ""}`}>
           <div>
-            {b.religion && <span className="badge">religión</span>} <span className="badge">{b.kind}</span> “{b.statement}”
+            {b.religion && <span className="badge badge--accent">religión</span>} <span className="badge">{b.kind}</span> “{b.statement}”
           </div>
           <div className="muted small">
-            {b.founderId !== null ? <AgentLink id={b.founderId} name={b.founderName ?? undefined} /> : "origen desconocido"} · {b.adherents} fieles
+            {b.founderId !== null ? <AgentLink id={b.founderId} name={b.founderName ?? undefined} /> : "origen desconocido"} · {b.adherents} {b.adherents === 1 ? "fiel" : "fieles"} · {formatTickLong(b.tick, tpd)}
           </div>
         </li>
       ))}
@@ -150,7 +204,8 @@ function Beliefs({ list }: { list: BeliefInfo[] }) {
 }
 
 function Techs({ list }: { list: TechInfo[] }) {
-  const known = list.filter((t) => t.discoveredTick !== null);
+  const tpd = useWorldStore((s) => s.world?.ticksPerDay ?? 144);
+  const known = list.filter((t) => t.discoveredTick !== null).sort((a, b) => b.knownBy - a.knownBy);
   const pending = list.filter((t) => t.discoveredTick === null);
   return (
     <div>
@@ -162,7 +217,7 @@ function Techs({ list }: { list: TechInfo[] }) {
             {t.discovererId !== null && (
               <span className="muted small">
                 {" "}
-                · descubierta por <AgentLink id={t.discovererId} />
+                · descubierta por <AgentLink id={t.discovererId} /> {t.discoveredTick !== null && formatTickLong(t.discoveredTick, tpd)}
               </span>
             )}
           </li>
@@ -185,14 +240,17 @@ function Techs({ list }: { list: TechInfo[] }) {
 }
 
 function Texts({ list }: { list: TextInfo[] }) {
+  const tpd = useWorldStore((s) => s.world?.ticksPerDay ?? 144);
+  const sorted = list.slice().sort((a, b) => b.tick - a.tick);
   return (
     <ul className="list">
-      {list.map((t) => (
+      {sorted.map((t) => (
         <li key={t.id} className="text">
           <details className="fold">
             <summary>
-              <strong>{t.title}</strong> <span className="muted small">
-                {t.kind} · {t.medium} · <AgentLink id={t.authorId} name={t.authorName} /> · {t.reads} lecturas
+              <strong>{t.title}</strong>{" "}
+              <span className="muted small">
+                {t.kind} · {MEDIUM_LABELS[t.medium] ?? t.medium} · <AgentLink id={t.authorId} name={t.authorName} /> · {t.reads} {t.reads === 1 ? "lectura" : "lecturas"} · {formatTickLong(t.tick, tpd)}
               </span>
             </summary>
             <p className="prose">{t.body}</p>
@@ -204,17 +262,41 @@ function Texts({ list }: { list: TextInfo[] }) {
 }
 
 function Laws({ list }: { list: LawInfo[] }) {
+  const tpd = useWorldStore((s) => s.world?.ticksPerDay ?? 144);
+  const sorted = list.slice().sort((a, b) => Number(b.active) - Number(a.active) || b.tick - a.tick);
   return (
     <ul className="list">
-      {list.map((l) => (
+      {sorted.map((l) => (
         <li key={l.id} className={`law${l.active ? "" : " law--inactive"}`}>
           <div>
             <span className="badge">{l.groupName}</span> “{l.statement}”
           </div>
           <div className="muted small">
-            declarada por <AgentLink id={l.declarerId} name={l.declarerName} /> · castigo: {l.punishment} · {l.enforcements} aplicaciones{l.active ? "" : " · derogada"}
+            declarada por <AgentLink id={l.declarerId} name={l.declarerName} /> {formatTickLong(l.tick, tpd)} · castigo: {l.punishment} · {l.enforcements} {l.enforcements === 1 ? "aplicación" : "aplicaciones"}
+            {l.active ? "" : " · derogada"}
           </div>
           {l.prohibits.length > 0 && <div className="muted small">prohíbe {l.prohibits.join(", ")}</div>}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Crimes({ list }: { list: CrimeInfo[] }) {
+  const tpd = useWorldStore((s) => s.world?.ticksPerDay ?? 144);
+  const sorted = list.slice().sort((a, b) => b.tick - a.tick).slice(0, 40);
+  return (
+    <ul className="list list--dense">
+      {sorted.map((c) => (
+        <li key={c.id} className="crime">
+          <span className="muted num">{formatTickLong(c.tick, tpd)}</span> <AgentLink id={c.criminalId} name={c.criminalName} /> <span className="crime__verb">{c.verb.replace(/_/g, " ")}</span>
+          {c.victimId !== null && (
+            <>
+              {" "}
+              a <AgentLink id={c.victimId} name={c.victimName ?? undefined} />
+            </>
+          )}{" "}
+          <span className={`badge ${c.punished ? "badge--good" : "badge--warn"}`}>{c.punished ? "castigado" : "impune"}</span>
         </li>
       ))}
     </ul>

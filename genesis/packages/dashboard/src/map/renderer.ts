@@ -553,6 +553,7 @@ export class MapRenderer {
     const ctx = this.begin("structures");
     const ws = useWorldStore.getState();
     if (layers.territories && ws.groups.length) {
+      const labels: Array<{ x: number; y: number; w: number; text: string; color: string }> = [];
       for (const t of computeTerritories(ws.groups, ws.agents)) {
         ctx.beginPath();
         t.hull.forEach(([x, y], i) => {
@@ -562,23 +563,34 @@ export class MapRenderer {
         });
         ctx.closePath();
         ctx.fillStyle = t.color;
-        ctx.globalAlpha = 0.14;
+        ctx.globalAlpha = 0.12;
         ctx.fill();
-        ctx.globalAlpha = 0.6;
+        ctx.globalAlpha = 0.55;
         ctx.strokeStyle = t.color;
         ctx.lineWidth = 1.5;
         ctx.stroke();
-        ctx.globalAlpha = 0.9;
-        ctx.font = "600 11px system-ui, sans-serif";
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
+        ctx.globalAlpha = 1;
         const [cx, cy] = worldToScreen(cam, this.W, this.H, t.centroid[0], t.centroid[1]);
+        labels.push({ x: cx, y: cy, w: 0, text: t.name, color: t.color });
+      }
+      // etiquetas: si dos tribus vecinas se pisan, la segunda baja un renglón
+      ctx.font = "600 11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const placed: Array<{ x: number; y: number; w: number }> = [];
+      for (const l of labels) {
+        l.w = ctx.measureText(l.text).width + 10;
+        for (let tries = 0; tries < 6; tries++) {
+          const hit = placed.some((p) => Math.abs(p.x - l.x) < (p.w + l.w) / 2 && Math.abs(p.y - l.y) < 14);
+          if (!hit) break;
+          l.y += 14;
+        }
+        placed.push({ x: l.x, y: l.y, w: l.w });
         ctx.lineWidth = 3;
         ctx.strokeStyle = "rgba(0,0,0,0.7)";
-        ctx.strokeText(t.name, cx, cy);
+        ctx.strokeText(l.text, l.x, l.y);
         ctx.fillStyle = "#fff";
-        ctx.fillText(t.name, cx, cy);
-        ctx.globalAlpha = 1;
+        ctx.fillText(l.text, l.x, l.y);
       }
     }
     if (!layers.structures) return;

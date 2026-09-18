@@ -29,6 +29,26 @@ export interface Toast {
   at: number;
 }
 
+export interface NoticeEntry {
+  id: number;
+  level: "info" | "warn" | "error";
+  text: string;
+  at: number;
+  tick: number;
+}
+
+/** Un acto divino enviado y, cuando llega, la respuesta del servidor. */
+export interface GodAct {
+  id: number;
+  at: number;
+  label: string;
+  result: string | null;
+  ok: boolean | null;
+}
+
+export const NOTICE_LOG_SIZE = 20;
+export const GOD_LOG_SIZE = 8;
+
 export interface Cell {
   x: number;
   y: number;
@@ -49,6 +69,12 @@ interface UiState {
   /** pedido de centrar el mapa; `seq` cambia en cada pedido */
   panRequest: { x: number; y: number; seq: number } | null;
   toasts: Toast[];
+  /** últimos avisos del servidor (campana) */
+  notices: NoticeEntry[];
+  noticesOpen: boolean;
+  unreadNotices: number;
+  /** últimos actos divinos enviados desde este panel */
+  godActs: GodAct[];
   theme: ThemeMode;
 
   select(id: number | null, opts?: { focusTab?: boolean }): void;
@@ -64,11 +90,18 @@ interface UiState {
   panTo(x: number, y: number): void;
   pushToast(level: Toast["level"], text: string): void;
   dismissToast(id: number): void;
+  /** guarda un aviso en la campana (sin toast) */
+  logNotice(level: Toast["level"], text: string, tick: number): void;
+  toggleNotices(open?: boolean): void;
+  pushGodAct(label: string): void;
+  resolveGodAct(result: string, ok: boolean): void;
   setTheme(t: ThemeMode): void;
 }
 
 let toastSeq = 0;
 let panSeq = 0;
+let noticeSeq = 0;
+let godSeq = 0;
 
 function readTheme(): ThemeMode {
   try {
@@ -104,6 +137,10 @@ export const useUiStore = create<UiState>()((set, get) => ({
   pickedCell: null,
   panRequest: null,
   toasts: [],
+  notices: [],
+  noticesOpen: false,
+  unreadNotices: 0,
+  godActs: [],
   theme: readTheme(),
 
   select(id, opts) {
@@ -168,6 +205,34 @@ export const useUiStore = create<UiState>()((set, get) => ({
   dismissToast(id) {
     const toasts = get().toasts;
     if (toasts.some((t) => t.id === id)) set({ toasts: toasts.filter((t) => t.id !== id) });
+  },
+
+  logNotice(level, text, tick) {
+    const entry: NoticeEntry = { id: ++noticeSeq, level, text, at: Date.now(), tick };
+    const s = get();
+    set({
+      notices: [entry, ...s.notices].slice(0, NOTICE_LOG_SIZE),
+      unreadNotices: s.noticesOpen ? 0 : Math.min(99, s.unreadNotices + 1),
+    });
+  },
+
+  toggleNotices(open) {
+    const next = open ?? !get().noticesOpen;
+    set({ noticesOpen: next, unreadNotices: next ? 0 : get().unreadNotices });
+  },
+
+  pushGodAct(label) {
+    const act: GodAct = { id: ++godSeq, at: Date.now(), label, result: null, ok: null };
+    set({ godActs: [act, ...get().godActs].slice(0, GOD_LOG_SIZE) });
+  },
+
+  resolveGodAct(result, ok) {
+    const acts = get().godActs;
+    const idx = acts.findIndex((a) => a.result === null);
+    if (idx < 0) return;
+    const next = acts.slice();
+    next[idx] = { ...acts[idx]!, result, ok };
+    set({ godActs: next });
   },
 
   setTheme(theme) {

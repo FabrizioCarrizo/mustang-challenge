@@ -1,5 +1,6 @@
 import type { EventInfo } from "@genesis/protocol";
 import { useEffect } from "react";
+import { ReplayBanner, ReplayBar } from "./components/ReplayBar.tsx";
 import { RightPanel } from "./components/RightPanel.tsx";
 import { Ticker } from "./components/Ticker.tsx";
 import { Toasts } from "./components/Toasts.tsx";
@@ -7,7 +8,7 @@ import { TopBar, sendControl } from "./components/TopBar.tsx";
 import { apiGet } from "./lib/api.ts";
 import { MapCanvas } from "./map/MapCanvas.tsx";
 import { useUiStore } from "./store/uiStore.ts";
-import { useWorldStore } from "./store/worldStore.ts";
+import { isReplaying, useWorldStore } from "./store/worldStore.ts";
 
 function isEditable(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
@@ -19,16 +20,19 @@ export function App() {
   const panelOpen = useUiStore((s) => s.panelOpen);
   const ready = useWorldStore((s) => s.ready);
   const connection = useWorldStore((s) => s.connection);
+  const replaying = useWorldStore((s) => isReplaying(s));
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.code === "Space" && !isEditable(e.target) && !e.repeat) {
         e.preventDefault();
+        if (isReplaying(useWorldStore.getState())) return;
         const paused = useWorldStore.getState().pacing?.paused ?? true;
         sendControl(paused ? "play" : "pause");
       } else if (e.key === "Escape") {
         const ui = useUiStore.getState();
-        if (ui.cellPicker) ui.setCellPicker(false);
+        if (ui.noticesOpen) ui.toggleNotices(false);
+        else if (ui.cellPicker) ui.setCellPicker(false);
         else if (ui.selectedId !== null && !isEditable(e.target)) ui.select(null);
       }
     };
@@ -50,14 +54,18 @@ export function App() {
     <div className={`app${panelOpen ? "" : " app--panel-closed"}`}>
       <TopBar />
       <main className="main">
-        <MapCanvas />
-        <Ticker />
-        {!ready && (
-          <div className="overlay">
-            <div className="overlay__box">{connection === "reconnecting" ? "Sin conexión con el mundo. Reintentando…" : "Conectando con el mundo…"}</div>
-          </div>
-        )}
-        <Toasts />
+        <div className={`map-area${replaying ? " map-area--past" : ""}`}>
+          <MapCanvas />
+          {!replaying && <Ticker />}
+          <ReplayBanner />
+          {!ready && (
+            <div className="overlay">
+              <div className="overlay__box">{connection === "reconnecting" ? "Sin conexión con el mundo. Reintentando…" : "Conectando con el mundo…"}</div>
+            </div>
+          )}
+          <Toasts />
+        </div>
+        <ReplayBar />
       </main>
       <RightPanel />
     </div>

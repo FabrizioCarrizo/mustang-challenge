@@ -8,7 +8,7 @@ import { fmtPct } from "../lib/format.ts";
 import { NEED_LABELS, SEX_LABELS, STATUS_LABELS, TRAIT_LABELS, verbLabel } from "../lib/labels.ts";
 import { formatTickLong } from "../lib/time.ts";
 import { type AgentSubTab, useUiStore } from "../store/uiStore.ts";
-import { useWorldStore } from "../store/worldStore.ts";
+import { isReplaying, useWorldStore } from "../store/worldStore.ts";
 import { ConversationsTab } from "./agent/ConversationsTab.tsx";
 import { FamilyTab } from "./agent/FamilyTab.tsx";
 import { MindTab } from "./agent/MindTab.tsx";
@@ -85,6 +85,7 @@ function AgentDetailView({ d }: { d: AgentDetail }) {
   const setSubTab = useUiStore((s) => s.setAgentSubTab);
   const panTo = useUiStore((s) => s.panTo);
   const tpd = useWorldStore((s) => s.world?.ticksPerDay ?? 144);
+  const replaying = useWorldStore((s) => isReplaying(s));
   const dead = !d.alive;
   const inventory = ITEMS.filter((k) => (d.inventory[k] ?? 0) > 0);
 
@@ -130,10 +131,11 @@ function AgentDetailView({ d }: { d: AgentDetail }) {
             ["tribu", d.groupName ?? "ninguna"],
           ]}
         />
-        <details className="fold">
-          <summary>genoma cultural</summary>
-          {d.culturalGenome ? <p className="prose">{d.culturalGenome}</p> : <p className="muted">todavía vacío: se forma con la experiencia (fase 2).</p>}
+        <details className="fold" open={Boolean(d.culturalGenome)}>
+          <summary>Lo que me enseñaron</summary>
+          {d.culturalGenome ? <p className="prose genome">{d.culturalGenome}</p> : <p className="muted">Nada todavía: la primera generación no tuvo quien le enseñara.</p>}
         </details>
+        {replaying && <div className="replay-note">El detalle de un ser siempre es el del presente, aunque el mapa muestre el pasado.</div>}
       </header>
 
       <section className="section">

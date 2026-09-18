@@ -11,6 +11,7 @@ import type {
   MilestoneInfo,
   PacingInfo,
   ResourceKind,
+  SnapshotListItem,
   SnapshotMessage,
   SpeechInfo,
   StructureInfo,
@@ -20,6 +21,7 @@ import { RESOURCES } from "@genesis/protocol";
 import { create } from "zustand";
 import { decodeBase64 } from "../lib/base64.ts";
 import { DEFAULT_TICKS_PER_DAY } from "../lib/time.ts";
+import { socket } from "../lib/ws.ts";
 
 export type ConnectionState = "connecting" | "open" | "reconnecting";
 
@@ -73,6 +75,14 @@ export interface WorldState {
   /** detalle del ser suscripto (llega en cada delta) */
   focus: AgentDetail | null;
   lastDeltaAt: number;
+  /** viendo el pasado: tick del snapshot de replay que se muestra */
+  replayTick: number | null;
+  /** replay pedido y todavía no recibido */
+  replayPending: number | null;
+  /** el último tick vivo conocido (sigue corriendo mientras vemos el pasado) */
+  liveTick: number;
+  /** snapshots diarios disponibles (para la barra de tiempo) */
+  snapshots: SnapshotListItem[];
 
   setConnection(c: ConnectionState, attempt?: number): void;
   applySnapshot(m: SnapshotMessage): void;
@@ -81,6 +91,15 @@ export interface WorldState {
   mergeEvents(list: EventInfo[]): void;
   setMilestones(list: MilestoneInfo[]): void;
   setFocus(d: AgentDetail | null): void;
+  setSnapshots(list: SnapshotListItem[]): void;
+  /** pide al servidor una vista del pasado (o `null` para volver al presente) */
+  requestReplay(toTick: number | null): void;
+  /** el servidor no pudo reconstruir el pasado */
+  cancelReplayRequest(): void;
+}
+
+export function isReplaying(s: Pick<WorldState, "replayTick" | "replayPending">): boolean {
+  return s.replayTick !== null || s.replayPending !== null;
 }
 
 function emptyResources(): Record<ResourceKind, Uint8Array> {
@@ -162,6 +181,10 @@ export const useWorldStore = create<WorldState>()((set, get) => ({
   speechVersion: 0,
   focus: null,
   lastDeltaAt: 0,
+  replayTick: null,
+  replayPending: null,
+  liveTick: 0,
+  snapshots: [],
 
   setConnection(connection, attempt = 0) {
     set({ connection, reconnectAttempt: attempt });
@@ -169,6 +192,7 @@ export const useWorldStore = create<WorldState>()((set, get) => ({
 
   applySnapshot(m) {
     const s = get();
+    const replayTick = m.replayTick ?? null;
     const terrain = decodeBase64(m.terrain);
     const resources = emptyResources();
     for (const r of RESOURCES) {
@@ -185,12 +209,14 @@ export const useWorldStore = create<WorldState>()((set, get) => ({
     for (const st of m.structures) structures.set(st.id, st);
     const groupColors = new Map<number, string>();
     for (const g of m.groups) groupColors.set(g.id, g.color);
+    s.speech.clear();
     set({
       ready: true,
       world: m.world,
       clock: m.clock,
       climate: m.climate,
       tick: m.clock.tick,
+      liveTick: replayTick === null ? m.clock.tick : Math.max(s.liveTick, s.tick),
       epoch: m.epoch,
       budget: m.budget,
       pacing: m.pacing,
@@ -206,17 +232,27 @@ export const useWorldStore = create<WorldState>()((set, get) => ({
       structuresVersion: s.structuresVersion + 1,
       groups: m.groups,
       groupColors,
-      milestones: m.milestones.length ? m.milestones : s.milestones,
-      metrics: mergeMetricPoints(s.metrics, m.metrics),
+      // en el pasado se muestran los hitos de entonces; en vivo, una lista vacía no borra nada
+      milestones: replayTick !== null || m.milestones.length ? m.milestones : s.milestones,
+      metrics: replayTick !== null ? s.metrics : mergeMetricPoints(s.metrics, m.metrics),
+      speechVersion: s.speechVersion + 1,
       lastDeltaAt: performance.now(),
+      replayTick,
+      replayPending: null,
     });
   },
 
   applyDelta(m, selectedId) {
     const s = get();
+    // viendo el pasado no llegan deltas; si alguno se cuela, no debe romper la vista congelada
+    if (isReplaying(s)) {
+      set({ liveTick: Math.max(s.liveTick, m.tick) });
+      return;
+    }
     const tpd = s.world?.ticksPerDay ?? DEFAULT_TICKS_PER_DAY;
     const patch: Partial<WorldState> = {
       tick: m.tick,
+      liveTick: m.tick,
       clock: m.clock,
       climate: m.climate,
       lastDeltaAt: performance.now(),
@@ -302,6 +338,27 @@ export const useWorldStore = create<WorldState>()((set, get) => ({
 
   setMilestones(list) {
     set({ milestones: list });
+  },
+
+  setSnapshots(list) {
+    set({ snapshots: list.slice().sort((a, b) => a.tick - b.tick) });
+  },
+
+  requestReplay(toTick) {
+    const s = get();
+    if (toTick === null) {
+      if (!isReplaying(s)) return;
+      set({ replayPending: null });
+      socket.send({ t: "replay", toTick: null });
+      return;
+    }
+    const target = Math.max(0, Math.min(s.liveTick, Math.floor(toTick)));
+    set({ replayPending: target });
+    socket.send({ t: "replay", toTick: target });
+  },
+
+  cancelReplayRequest() {
+    if (get().replayPending !== null) set({ replayPending: null });
   },
 
   /** Limita el detalle a ~4 actualizaciones por segundo (llega en cada delta). */

@@ -1,12 +1,24 @@
-import type { MetricsPoint } from "@genesis/protocol";
+import type { CostInfo, MetricsPoint } from "@genesis/protocol";
 import { useEffect, useMemo, useState } from "react";
 import { LineChart } from "../charts/LineChart.tsx";
 import { useThemeKey } from "../charts/theme.ts";
-import { Empty } from "../components/ui.tsx";
-import { apiGet } from "../lib/api.ts";
-import { fmtNum, fmtUsd } from "../lib/format.ts";
+import { Empty, Loading, Section } from "../components/ui.tsx";
+import { apiGet, useApi } from "../lib/api.ts";
+import { fmtCompact, fmtNum, fmtPct, fmtUsd } from "../lib/format.ts";
 import { NEED_LABELS } from "../lib/labels.ts";
 import { useWorldStore } from "../store/worldStore.ts";
+
+const CALL_TYPE_LABELS: Record<string, string> = {
+  daily_plan: "plan del día",
+  reflection: "reflexión",
+  dialogue: "diálogo",
+  reaction: "reacción",
+  create: "creación",
+  govern: "gobierno",
+  heritage: "herencia",
+  historian: "historiador",
+  bard: "bardo",
+};
 
 const RANGES: Array<{ points: number; label: string }> = [
   { points: 288, label: "2 días" },
@@ -24,6 +36,7 @@ export function MetricsPanel() {
   const mergeMetrics = useWorldStore((s) => s.mergeMetrics);
   const budget = useWorldStore((s) => s.budget);
   const tpd = useWorldStore((s) => s.world?.ticksPerDay ?? 144);
+  const groupCount = useWorldStore((s) => s.groups.length);
   const themeKey = useThemeKey();
   const [range, setRange] = useState(288);
 
@@ -83,7 +96,7 @@ export function MetricsPanel() {
         <Stat label="nacimientos hoy" value={last ? fmtInt(last.births) : "—"} />
         <Stat label="muertes hoy" value={last ? fmtInt(last.deaths) : "—"} />
         <Stat label="gini" value={last ? fmt2(last.gini) : "—"} />
-        <Stat label="violencia hoy" value={last ? fmtInt(last.violence) : "—"} />
+        <Stat label="tribus" value={fmtInt(groupCount)} />
         <Stat label="USD hoy" value={budget ? fmtUsd(budget.usdToday) : last ? fmtUsd(last.usd) : "—"} />
       </div>
 
@@ -108,7 +121,71 @@ export function MetricsPanel() {
       <LineChart title="Necesidades medias" subtitle="1 = satisfecha" x={x} series={needsSeries} yRange={unit} format={fmt1} ticksPerDay={tpd} themeKey={themeKey} height={190} />
       <LineChart title="Desigualdad (Gini)" x={x} series={giniSeries} yRange={unit} format={fmt2} ticksPerDay={tpd} themeKey={themeKey} height={130} />
       <LineChart title="USD gastado" subtitle="acumulado del día" x={x} series={usdSeries} format={fmtMoney} ticksPerDay={tpd} themeKey={themeKey} height={130} />
+      <CostSection />
     </div>
+  );
+}
+
+/** Costo del cerebro (System 2): total, por día simulado, caché y detalle por tipo de llamada. */
+function CostSection() {
+  const res = useApi<CostInfo>("/cost");
+  const reload = res.reload;
+  useEffect(() => {
+    const id = window.setInterval(reload, 30_000);
+    return () => window.clearInterval(id);
+  }, [reload]);
+  const cost = res.data;
+  return (
+    <Section
+      title="Costo del cerebro"
+      right={
+        <button type="button" className="btn btn--xs btn--ghost" onClick={reload} title="volver a pedir">
+          ↻
+        </button>
+      }
+    >
+      {!cost && res.status === "loading" && <Loading />}
+      {res.status === "missing" && <Empty>El costo llega con el cerebro de la fase 2.</Empty>}
+      {res.status === "error" && <Empty>No se pudo leer el costo: {res.error}</Empty>}
+      {cost && (
+        <div data-testid="cost">
+          <div className="stats stats--4">
+            <Stat label="USD total" value={fmtUsd(cost.totalUsd, cost.totalUsd < 1 ? 4 : 2)} />
+            <Stat label="USD por día sim." value={fmtUsd(cost.usdPerSimDay, cost.usdPerSimDay < 1 ? 4 : 2)} />
+            <Stat label="caché" value={fmtPct(cost.cacheHitRate)} />
+            <Stat label="llamadas" value={fmtCompact(cost.calls)} />
+          </div>
+          <div className="muted small num">
+            {fmtCompact(cost.inTokens)} tokens de entrada · {fmtCompact(cost.cacheRead)} desde caché · {fmtCompact(cost.outTokens)} de salida
+          </div>
+          {cost.byType.length > 0 && (
+            <table className="table table--compact">
+              <thead>
+                <tr>
+                  <th>tipo</th>
+                  <th className="num">llamadas</th>
+                  <th className="num">USD</th>
+                  <th className="num">por llamada</th>
+                </tr>
+              </thead>
+              <tbody>
+                {cost.byType
+                  .slice()
+                  .sort((a, b) => b.usd - a.usd || b.calls - a.calls)
+                  .map((t) => (
+                    <tr key={t.callType}>
+                      <td>{CALL_TYPE_LABELS[t.callType] ?? t.callType}</td>
+                      <td className="num">{fmtNum(t.calls)}</td>
+                      <td className="num">{fmtUsd(t.usd, 4)}</td>
+                      <td className="num">{t.calls > 0 ? fmtUsd(t.usd / t.calls, 5) : "—"}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </Section>
   );
 }
 
