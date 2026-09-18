@@ -19,32 +19,38 @@ describe("replay, bifurcación y poda", () => {
       const society = new Society(e, w.db);
       society.install();
       e.society = society;
-      const brain = new Brain(e, buildRoutes(e.config, "mock")!, w.db, { density: 1, society });
+      // densidad reducida (como el preset "cronica") y cambio de densidad a mitad de camino: el replay debe seguirlos
+      const brain = new Brain(e, buildRoutes(e.config, "mock")!, w.db, { density: 0.25, society });
       brain.install();
       const tpd = e.config.time.ticksPerDay;
       for (let t = 1; t <= tpd * 3; t++) {
         if (t === 200) void e.god({ kind: "whisper", agentId: e.s.alive[0]!, text: "Juntá leña antes de que nieve" });
         if (t === 300) void e.god({ kind: "spawn_resource", x: e.s.agents.get(e.s.alive[1]!)!.x, y: e.s.agents.get(e.s.alive[1]!)!.y, resource: "comida", amount: 3, radius: 2 });
+        if (t === tpd + 50) brain.setDensity(1);
         const out = e.step();
         w.writer.write(out);
         if (out.tick % tpd === 0) w.writer.snapshot();
-        await new Promise<void>((r) => setImmediate(r));
+        // el hilo se cede cada dos ticks: las decisiones se integran con un retraso irregular, y el replay igual las aplica en su tick
+        if (t % 2 === 0) await new Promise<void>((r) => setImmediate(r));
       }
       w.writer.flush();
       const finalHash = e.hash();
       // las llamadas que terminaron en el último tick nunca se integraron (eso pasa al tick siguiente): no dejan grabación
       const completed = brain.scheduler.callsOk + brain.scheduler.callsFailed;
       const integrated = w.db.llmTotals().calls;
-      expect(completed).toBeGreaterThan(integrated);
-      const result = await replayWorld(w.db, tpd + 1, tpd * 3);
-      expect(result.fromTick).toBe(tpd);
-      expect(result.steps.length).toBe(2);
-      for (const s of result.steps) expect(s.match).toBe(true);
-      expect(result.engine.hash()).toBe(finalHash);
-      expect(result.godActions).toBe(2); // el susurro (t=200) y la abundancia (t=300) son posteriores al snapshot de partida (tick 144) y se reaplican
-      expect(result.intentHits).toBeGreaterThan(0);
-      // las únicas decisiones sin grabación son las que la corrida original no llegó a integrar
-      expect(result.intentMisses).toBe(completed - integrated);
+      expect(integrated).toBeGreaterThan(20);
+      for (const from of [1, tpd + 1]) {
+        const result = await replayWorld(w.db, from, tpd * 3);
+        expect(result.fromTick).toBe(from === 1 ? 0 : tpd);
+        expect(result.steps.length).toBe(from === 1 ? 3 : 2);
+        for (const s of result.steps) expect(s.match).toBe(true);
+        expect(result.engine.hash()).toBe(finalHash);
+        expect(result.godActions).toBe(2); // el susurro (t=200) y la abundancia (t=300) son posteriores a ambos snapshots de partida y se reaplican
+        expect(result.intentOrphans).toBe(0);
+        // se reaplican todas las llamadas integradas después del snapshot de partida; las únicas sin grabación son las que la corrida original no llegó a integrar
+        expect(result.intentHits).toBe(w.db.llmCallRows(result.fromTick + 1, tpd * 3).length);
+        expect(result.intentMisses).toBe(completed - integrated);
+      }
       w.db.close();
     } finally {
       rmSync(dir, { recursive: true, force: true });

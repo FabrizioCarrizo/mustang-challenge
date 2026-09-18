@@ -96,9 +96,12 @@ export const commands: Record<string, (ctx: CommandContext) => Promise<void>> = 
         if (ctx.values.verify) console.log(`  tick ${step.tick}: ${step.match === null ? "sin huella grabada" : step.match ? "coincide ✔" : `DIFIERE ✘ (${step.recordedHash} vs ${step.hash})`}`);
       },
     });
-    console.log(`Listo: tick ${result.engine.s.tick}, población ${result.engine.s.alive.length}. Decisiones grabadas reusadas: ${result.intentHits}; sin grabación: ${result.intentMisses}; actos de dios: ${result.godActions}.`);
+    console.log(
+      `Listo: tick ${result.engine.s.tick}, población ${result.engine.s.alive.length}. Decisiones grabadas reaplicadas en su tick: ${result.intentHits}; pedidos sin grabación (quedaron en vuelo al apagar): ${result.intentMisses}; grabaciones huérfanas (pedidas antes del snapshot de partida): ${result.intentOrphans}; actos de dios: ${result.godActions}.`,
+    );
     console.log(`Huellas diarias: ${ok} coinciden, ${bad} difieren, ${unknown} sin registro.`);
-    if (bad > 0) console.log("Las diferencias son esperables cuando el cerebro era un modelo real: las decisiones se reaplican en el tick más cercano, no en el exacto.");
+    if (bad > 0 && result.intentOrphans > 0) console.log("Hay grabaciones huérfanas: sus pedidos se despacharon antes del snapshot de partida y no se pueden reaplicar. Probá con --from más atrás.");
+    else if (bad > 0) console.log("Las huellas difieren: la corrida original tuvo decisiones que no quedaron grabadas (fallos de red, rechazos) o el mundo se reanudó tras un corte.");
     db.close();
   },
 

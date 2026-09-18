@@ -38,6 +38,8 @@ export class Brain {
   /** la sociedad, si está enganchada (tribus, líderes, leyes) */
   society: Society | null = null;
   private readonly byType = new Map<string, { calls: number; usd: number }>();
+  /** último modo cognitivo grabado como evento (densidad y silencio), para que el replay lo reproduzca */
+  private recordedMode: { density: number; muted: string } | null = null;
   /** capítulos de la crónica escritos en esta sesión (la DB tiene todos) */
   chapters: Array<{ tickFrom: number; tickTo: number; title: string; body: string; themes: string[]; protagonists: string[] }> = [];
 
@@ -107,9 +109,23 @@ export class Brain {
           const day = this.s.clock.day;
           if (day > 0 && day % this.cfg.brain.historianEveryDays === 0 && !this.scheduler.muted) this.requestHistorian();
         }
+        this.recordMode();
         this.scheduler.pump();
       },
     };
+  }
+
+  /**
+   * Deja grabado el modo cognitivo vigente en este tick (densidad del preset y
+   * silencio por presupuesto) cada vez que cambia: los pedidos que el cerebro
+   * decide hacer dependen de él, y el replay lo necesita para hacer los mismos.
+   */
+  private recordMode(): void {
+    const muted = this.scheduler.budget.muted;
+    const density = this.density;
+    if (this.recordedMode && this.recordedMode.density === density && this.recordedMode.muted === muted) return;
+    this.recordedMode = { density, muted };
+    this.engine.emit(makeEvent({ kind: "brain.mode", tick: this.s.tick, label: muted === "none" ? `densidad ${density}` : `mudo (${muted})`, importance: 0, data: { density, muted }, persist: true }));
   }
 
   /** Nacimientos → herencia; muertes notables → epopeya. */

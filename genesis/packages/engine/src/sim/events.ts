@@ -53,6 +53,7 @@ export type EventKind =
   | "god"
   | "intent"
   | "thought"
+  | "brain.mode"
   | "state.hash";
 
 export interface WorldEvent {
@@ -276,6 +277,8 @@ export function describeEvent(e: WorldEvent, names: NameResolver, selfId: number
       return v(`Decidí ${e.label}`, `decidió ${e.label}`);
     case "thought":
       return v("Pensé", "pensó");
+    case "brain.mode":
+      return `modo cognitivo: ${e.label}`;
     case "state.hash":
       return `hash ${e.label}`;
     default:

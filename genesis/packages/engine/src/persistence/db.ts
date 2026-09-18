@@ -366,6 +366,22 @@ export class WorldDb {
     return this.driver.prepare("SELECT * FROM llm_calls WHERE agent_id = ? ORDER BY id DESC LIMIT ?").all(agentId, limit);
   }
 
+  /** Llamadas integradas en una ventana de ticks, con su respuesta cruda: la fuente del replay. */
+  llmCallRows(from: number, to: number): Array<{ id: number; tick: number; agentId: number | null; callType: string; status: string; usd: number; responseJson: string | null }> {
+    return this.driver
+      .prepare("SELECT id, tick, agent_id, call_type, status, usd, response_json FROM llm_calls WHERE tick >= ? AND tick <= ? ORDER BY id ASC")
+      .all(from, to)
+      .map((r) => ({
+        id: Number(r.id),
+        tick: Number(r.tick),
+        agentId: r.agent_id === null ? null : Number(r.agent_id),
+        callType: String(r.call_type),
+        status: String(r.status),
+        usd: Number(r.usd ?? 0),
+        responseJson: r.response_json === null || r.response_json === undefined ? null : String(r.response_json),
+      }));
+  }
+
   llmTotals(): { calls: number; usd: number; inTokens: number; cacheRead: number; outTokens: number } {
     const r = this.driver
       .prepare("SELECT COUNT(*) AS calls, COALESCE(SUM(usd),0) AS usd, COALESCE(SUM(in_tokens),0) AS i, COALESCE(SUM(cache_read),0) AS c, COALESCE(SUM(out_tokens),0) AS o FROM llm_calls")

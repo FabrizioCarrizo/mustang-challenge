@@ -35,6 +35,8 @@ export class BudgetTracker {
   usdTotal = 0;
   private hourWindow: Array<[number, number]> = [];
   muted: "none" | "day" | "hour" | "total" = "none";
+  /** modo forzado (replay): reproduce el silencio grabado en vez de calcularlo del gasto */
+  override: "none" | "day" | "hour" | "total" | null = null;
 
   constructor(
     public usdPerSimDay: number,
@@ -58,11 +60,16 @@ export class BudgetTracker {
 
   newDay(): void {
     this.usdToday = 0;
+    if (this.override !== null) return;
     if (this.muted === "day") this.muted = "none";
   }
 
   /** ¿Se puede gastar `estUsd` más? Actualiza el modo mudo. */
   allows(estUsd: number, now = Date.now()): boolean {
+    if (this.override !== null) {
+      this.muted = this.override;
+      return this.override === "none";
+    }
     if (this.usdTotalCap > 0 && this.usdTotal + estUsd > this.usdTotalCap) {
       this.muted = "total";
       return false;

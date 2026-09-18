@@ -17,7 +17,7 @@ export function recordObservations(s: EngineState, events: WorldEvent[], spatial
   const radius = s.config.social.perceptionRadius;
   const scratch: number[] = [];
   for (const e of events) {
-    if (e.kind === "smalltalk" || e.kind === "state.hash" || e.kind === "intent" || e.kind === "thought") continue;
+    if (e.kind === "smalltalk" || e.kind === "state.hash" || e.kind === "intent" || e.kind === "thought" || e.kind === "brain.mode") continue;
     if (e.importance < 2) continue;
     if (e.kind === "agent.first") {
       // solo el protagonista recuerda sus primeras veces

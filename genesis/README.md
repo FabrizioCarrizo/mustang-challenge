@@ -109,7 +109,7 @@ Las leyes del mundo viven en `genesis.config.example.json` (copialo y pasalo con
 
 ## Los poderes divinos y el replay
 
-Cada acto de dios se graba como evento con su carga completa, así que la historia sigue siendo reproducible. `npm run replay -- --verify` vuelve a simular desde un snapshot reaplicando las decisiones grabadas de los seres y los actos de dios, y compara la huella diaria del estado con la grabada. Con el cerebro `mock` las huellas coinciden exactamente; con un modelo real las decisiones se reaplican en el tick más cercano y la reproducción es aproximada (el mundo es determinista, las mentes no).
+Cada acto de dios se graba como evento con su carga completa, así que la historia sigue siendo reproducible. `npm run replay -- --verify` vuelve a simular desde un snapshot sin gastar un token: reaplica cada respuesta grabada del modelo (con su estado, su costo y su cuerpo, tal como quedó en `llm_calls`) en el tick exacto en que se integró, sigue los cambios grabados de densidad cognitiva y de silencio por presupuesto, reaplica los actos de dios y compara la huella diaria del estado con la grabada. El mundo es determinista y las mentes quedan grabadas, así que las huellas coinciden también con un modelo real; las únicas decisiones que no se pueden reaplicar son las que quedaron en vuelo cuando se apagó el proceso (nunca llegaron a integrarse) y las que se pidieron antes del snapshot de partida (el comando las cuenta como "huérfanas": elegí un `--from` anterior).
 
 `fork` copia el mundo en un tick a otro nombre con su propia seed derivada: dos historias que divergen desde el mismo día. `prune` pliega las observaciones viejas y poco importantes en resúmenes diarios (los seres siguen recordando lo importante) y recorta lo trivial; el servidor lo hace solo una vez por semana simulada.
 
@@ -136,7 +136,7 @@ genesis/
 ## Límites conocidos
 
 - Las tribus, los líderes, la moneda y las religiones se detectan con heurísticas; son señales, no verdades. Los umbrales están en `packages/engine/src/society/`.
-- Con un modelo real, el replay es aproximado; con `mock` es exacto.
+- El replay reaplica lo grabado en `llm_calls`; la poda recorta esos cuerpos a los 30 días (y borra los eventos triviales según `retentionDays`), así que la historia se reproduce exacta dentro de esa ventana y aproximada más atrás.
 - Los costos de la tabla son estimaciones: `npm run cost` muestra lo real.
 - Un mundo de 128×128 con 100 seres genera ~120 MB por 30 días simulados sin poda; la poda semanal lo mantiene acotado.
 - Fable 5.1 puede rechazar alguna llamada por sus clasificadores de seguridad; el fallback de servidor la reenruta y, si igual falla, el ser simplemente calla ese turno.
