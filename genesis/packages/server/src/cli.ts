@@ -63,11 +63,22 @@ function loadConfigFile(path: string | undefined): GenesisConfigInput {
   return JSON.parse(readFileSync(full, "utf8")) as GenesisConfigInput;
 }
 
+/** Configuración de un mundo nuevo: archivo + banderas --agents/--size. */
+function newWorldConfig(): GenesisConfigInput {
+  const input = loadConfigFile(values.config);
+  input.world = { ...(input.world ?? {}) };
+  if (values.agents) input.world.initialPopulation = Number(values.agents);
+  if (values.size) input.world.size = Number(values.size);
+  return input;
+}
+
 function daySummary(day: number, out: TickOutput, runner: Runner): string {
   const s = runner.engine.s;
   const m = out.metrics;
   const needs = m ? `sed ${m.avgNeeds.sed.toFixed(2)} ham ${m.avgNeeds.hambre.toFixed(2)} cal ${m.avgNeeds.calor.toFixed(2)} soc ${m.avgNeeds.social.toFixed(2)} sen ${m.avgNeeds.sentido.toFixed(2)}` : "";
-  return `día ${String(day).padStart(4)} · ${formatClock(s.clock).padEnd(34)} · ${s.climate.weather.padEnd(9)} ${s.climate.temperature.toFixed(1).padStart(5)}° · pob ${String(s.alive.length).padStart(3)} · nac ${s.today.births} · muertes ${s.today.deaths} · estr ${s.structures.size} · ${needs}`;
+  const d = out.newDay ? s.yesterday : s.today;
+  const brain = runner.brain ? ` · llamadas ${d.llmCalls} (US$${d.usd.toFixed(3)}) charlas ${d.dialogues} creencias ${s.beliefs.size}` : "";
+  return `día ${String(day).padStart(4)} · ${formatClock(s.clock).padEnd(34)} · ${s.climate.weather.padEnd(9)} ${s.climate.temperature.toFixed(1).padStart(5)}° · pob ${String(s.alive.length).padStart(3)} · nac ${d.births} · muertes ${d.deaths} · estr ${s.structures.size} · ${needs}${brain}`;
 }
 
 async function main(): Promise<void> {
@@ -78,11 +89,7 @@ async function main(): Promise<void> {
   switch (command) {
     case "new": {
       const seed = Number(values.seed ?? Math.floor(Math.random() * 1_000_000));
-      const input = loadConfigFile(values.config);
-      input.world = { ...(input.world ?? {}) };
-      if (values.agents) input.world.initialPopulation = Number(values.agents);
-      if (values.size) input.world.size = Number(values.size);
-      const w = createWorld(worldsDir, worldName, seed, input);
+      const w = createWorld(worldsDir, worldName, seed, newWorldConfig());
       console.log(`Mundo "${worldName}" creado con seed ${seed}: ${w.engine.s.alive.length} seres en una grilla de ${w.engine.s.grid.size}×${w.engine.s.grid.size}.`);
       console.log(`Carpeta: ${w.db.dir}`);
       w.db.close();
@@ -92,13 +99,13 @@ async function main(): Promise<void> {
       const days = Number(values.days ?? 10);
       const w = worldExists(worldsDir, worldName)
         ? openWorld(worldsDir, worldName)
-        : createWorld(worldsDir, worldName, Number(values.seed ?? 42), loadConfigFile(values.config));
+        : createWorld(worldsDir, worldName, Number(values.seed ?? 42), newWorldConfig());
       if (w.resumedFromTick > 0) w.db.deleteAfterTick(w.resumedFromTick);
       const runner = new Runner(w, { multiplier: Infinity });
       await attachBrain(runner, brainMode);
       console.log(`Corriendo ${days} días de "${worldName}" desde el tick ${w.engine.s.tick} (cerebro: ${brainMode})`);
       const t0 = Date.now();
-      runner.runDays(days, (d, out) => {
+      await runner.runDays(days, (d, out) => {
         if (!values.quiet) console.log(daySummary(d, out, runner));
       });
       runner.takeSnapshot();
@@ -112,7 +119,7 @@ async function main(): Promise<void> {
       const port = Number(values.port ?? process.env.GENESIS_PORT ?? 7777);
       const w = worldExists(worldsDir, worldName)
         ? openWorld(worldsDir, worldName)
-        : createWorld(worldsDir, worldName, Number(values.seed ?? 42), loadConfigFile(values.config));
+        : createWorld(worldsDir, worldName, Number(values.seed ?? 42), newWorldConfig());
       if (w.resumedFromTick > 0) w.db.deleteAfterTick(w.resumedFromTick);
       const runner = new Runner(w, { preset: values.preset, multiplier: values.speed ? Number(values.speed) : undefined });
       await attachBrain(runner, brainMode);

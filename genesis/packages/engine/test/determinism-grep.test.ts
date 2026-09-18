@@ -16,7 +16,8 @@ describe("determinismo", () => {
     const src = join(import.meta.dirname, "..", "src");
     const offenders: string[] = [];
     for (const file of walk(src)) {
-      if (file.includes("/persistence/") || file.includes("/brain/")) continue; // I/O y llamadas externas sí pueden usar la hora real
+      // I/O, llamadas externas y el presupuesto por hora real sí pueden usar el reloj de pared
+      if (file.includes("/persistence/") || file.includes("/brain/") || file.endsWith("/cognition/scheduler.ts")) continue;
       const text = readFileSync(file, "utf8");
       if (/Math\.random\(|Date\.now\(|new Date\(/.test(text)) offenders.push(file.replace(src, ""));
     }

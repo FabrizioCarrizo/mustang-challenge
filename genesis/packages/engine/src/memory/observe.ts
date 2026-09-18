@@ -1,5 +1,6 @@
 import { pushMemory, type Agent, type Memory } from "../agents/agent.ts";
 import { clamp01 } from "../agents/needs.ts";
+import { explains } from "../society/beliefs.ts";
 import { describeEvent, type NameResolver, type WorldEvent } from "../sim/events.ts";
 import type { SpatialHash } from "../sim/spatial.ts";
 import type { EngineState } from "../sim/state.ts";
@@ -51,6 +52,8 @@ export function recordObservations(s: EngineState, events: WorldEvent[], spatial
       const a = s.agents.get(id);
       if (!a || a.diedTick !== null) continue;
       if (a.asleep && !global && e.importance < 7) continue;
+      // los participantes de una charla ya tienen su propio resumen
+      if (e.kind === "dialogue" && (e.agentId === a.id || e.targetId === a.id)) continue;
       const imp = witnessImportance(a, e);
       applyShocks(a, e, s);
       if (imp < MEMORY_MIN_IMPORTANCE) continue;
@@ -94,23 +97,25 @@ function witnessImportance(a: Agent, e: WorldEvent): number {
 }
 
 function applyShocks(a: Agent, e: WorldEvent, s: EngineState): void {
+  // un hecho que alguna creencia explica sacude mucho menos
+  const k = explains(s, a, e.tags) ? 0.3 : 1;
   switch (e.kind) {
     case "agent.died": {
       if (e.agentId === a.id) return;
       const close = isBonded(a, e.agentId);
-      a.needs.sentido = clamp01(a.needs.sentido - (close ? 0.4 : 0.15));
+      a.needs.sentido = clamp01(a.needs.sentido - (close ? 0.4 : 0.15) * k);
       a.needs.seguridad = clamp01(a.needs.seguridad - 0.1);
       break;
     }
     case "storm":
       if (e.label === "inicio") {
         const atHome = a.home && a.home.x === a.x && a.home.y === a.y;
-        a.needs.sentido = clamp01(a.needs.sentido - (atHome ? 0.04 : 0.1));
+        a.needs.sentido = clamp01(a.needs.sentido - (atHome ? 0.04 : 0.1) * k);
         a.needs.seguridad = clamp01(a.needs.seguridad - (atHome ? 0.05 : 0.15));
       }
       break;
     case "drought":
-      if (e.label === "inicio") a.needs.sentido = clamp01(a.needs.sentido - 0.1);
+      if (e.label === "inicio") a.needs.sentido = clamp01(a.needs.sentido - 0.1 * k);
       break;
     case "attack":
       a.needs.seguridad = clamp01(a.needs.seguridad - (e.targetId === a.id ? 0.3 : 0.2));
@@ -119,7 +124,7 @@ function applyShocks(a: Agent, e: WorldEvent, s: EngineState): void {
       if (e.targetId === a.id) a.needs.seguridad = clamp01(a.needs.seguridad - 0.15);
       break;
     case "god":
-      a.needs.sentido = clamp01(a.needs.sentido - 0.1);
+      a.needs.sentido = clamp01(a.needs.sentido - 0.1 * k);
       break;
     case "ritual":
     case "pray":
@@ -147,6 +152,5 @@ function applyShocks(a: Agent, e: WorldEvent, s: EngineState): void {
     default:
       break;
   }
-  void s;
 }
 

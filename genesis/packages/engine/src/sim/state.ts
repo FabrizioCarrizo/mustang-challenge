@@ -1,4 +1,5 @@
 import type { Agent, Memory } from "../agents/agent.ts";
+import type { Belief } from "../society/beliefs.ts";
 import type { GenesisConfig } from "../config.ts";
 import type { RngStreams } from "../rng.ts";
 import type { ClimateState } from "../world/climate.ts";
@@ -47,6 +48,8 @@ export interface EngineState {
   counters: Counters;
   rng: RngStreams;
   today: DayStats;
+  /** estadísticas del día anterior completo */
+  yesterday: DayStats;
   /** estadísticas acumuladas */
   totals: { births: number; deaths: number; violence: number; trades: number; usd: number; llmCalls: number };
   /** ticks en los que se completó el último recálculo de campos */
@@ -60,4 +63,6 @@ export interface EngineState {
   milestones: Map<string, number>;
   /** memorias creadas en este tick, pendientes de persistir (transitorio) */
   pendingMemories: Array<{ agentId: number; memory: Memory }>;
+  /** creencias del mundo */
+  beliefs: Map<number, Belief>;
 }

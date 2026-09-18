@@ -31,6 +31,19 @@ export class PersistenceWriter {
     this.db.transaction(() => {
       for (const out of batch) {
         this.db.insertEvents(out.events);
+        for (const e of out.events) {
+          if (e.kind === "trade" && e.agentId !== null && e.targetId !== null) {
+            this.db.insertTrade({
+              tick: e.tick,
+              aId: e.agentId,
+              bId: e.targetId,
+              gave: (e.data.gave as Record<string, number>) ?? {},
+              got: (e.data.got as Record<string, number>) ?? {},
+              x: e.x,
+              y: e.y,
+            });
+          }
+        }
         if (out.metrics) this.db.insertMetrics(out.metrics);
         if (out.deaths.length > 0) {
           this.db.upsertAgents(

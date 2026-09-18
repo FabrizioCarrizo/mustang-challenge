@@ -1,4 +1,4 @@
-import type { ResourceKind, StructureKind, Verb } from "@genesis/protocol";
+import type { ItemKind, ResourceKind, StructureKind, Verb } from "@genesis/protocol";
 import { inv, type Agent } from "../../agents/agent.ts";
 import { urgency } from "../../agents/needs.ts";
 import type { GenesisConfig } from "../../config.ts";
@@ -30,9 +30,12 @@ export interface Candidate {
   targetId: number | null;
   resource: ResourceKind | null;
   structureKind: StructureKind | null;
+  item: ItemKind | null;
+  amount: number;
   ticks: number;
   /** campo de distancia a seguir hasta el objetivo */
   field: Uint16Array | null;
+  fromPlan: boolean;
 }
 
 export interface DecisionContext {
@@ -45,9 +48,11 @@ export interface DecisionContext {
   perception: Perception;
   /** hay algún refugio o fuego alcanzable */
   shelterExists: boolean;
+  /** candidato derivado del plan System 2 (si hay) */
+  planCandidate?: Candidate | null;
 }
 
-function cand(verb: Verb, score: number, reason: string, extra: Partial<Candidate> = {}): Candidate {
+export function cand(verb: Verb, score: number, reason: string, extra: Partial<Candidate> = {}): Candidate {
   return {
     verb,
     score,
@@ -57,8 +62,11 @@ function cand(verb: Verb, score: number, reason: string, extra: Partial<Candidat
     targetId: null,
     resource: null,
     structureKind: null,
+    item: null,
+    amount: 0,
     ticks: 1,
     field: null,
+    fromPlan: false,
     ...extra,
   };
 }
@@ -209,6 +217,9 @@ export function decide(a: Agent, ctx: DecisionContext): Candidate {
   // --- descansar ---
   cands.push(cand("descansar", 0.03, "descanso un momento", { ticks: 1 }));
 
+  // --- el plan de System 2 ---
+  if (ctx.planCandidate) cands.push(ctx.planCandidate);
+
   // compromiso con la acción en curso y ruido
   let best: Candidate | null = null;
   for (const c of cands) {
@@ -221,8 +232,11 @@ export function decide(a: Agent, ctx: DecisionContext): Candidate {
   return best!;
 }
 
-function sameTarget(cur: { targetId: number | null; resource: ResourceKind | null; structureKind: StructureKind | null }, c: Candidate): boolean {
-  return cur.targetId === c.targetId && cur.resource === c.resource && cur.structureKind === c.structureKind;
+export function sameTarget(
+  cur: { targetId: number | null; resource: ResourceKind | null; structureKind: StructureKind | null; item?: ItemKind | null },
+  c: Candidate,
+): boolean {
+  return cur.targetId === c.targetId && cur.resource === c.resource && cur.structureKind === c.structureKind && (cur.item ?? null) === c.item;
 }
 
 export function cellIndexOf(grid: WorldGrid, a: Agent): number {

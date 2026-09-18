@@ -2,7 +2,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import WebSocket from "ws";
 import { createWorld } from "@genesis/engine";
 import type { DeltaMessage, SnapshotMessage } from "@genesis/protocol";
 import { Broadcaster } from "../src/broadcaster.ts";
@@ -19,7 +18,7 @@ beforeAll(async () => {
   dir = mkdtempSync(join(tmpdir(), "genesis-api-"));
   const w = createWorld(dir, "api", 11, { world: { size: 64, initialPopulation: 12 } });
   runner = new Runner(w, { multiplier: 1, simDayRealSeconds: 10 });
-  runner.runDays(1);
+  await runner.runDays(1);
   broadcaster = new Broadcaster(runner);
   app = await createHttpServer(runner, broadcaster);
   await app.listen({ port: 0, host: "127.0.0.1" });
@@ -77,8 +76,8 @@ describe("API", () => {
     const messages: Array<SnapshotMessage | DeltaMessage> = [];
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error("sin mensajes")), 5000);
-      ws.on("message", (raw) => {
-        const msg = JSON.parse(raw.toString());
+      ws.addEventListener("message", (ev: MessageEvent) => {
+        const msg = JSON.parse(String(ev.data));
         if (msg.t === "snapshot" || msg.t === "delta") messages.push(msg);
         if (messages.length === 1) {
           ws.send(JSON.stringify({ t: "subscribe", agentId: runner.engine.s.alive[0] }));
@@ -90,7 +89,7 @@ describe("API", () => {
           resolve();
         }
       });
-      ws.on("error", reject);
+      ws.addEventListener("error", () => reject(new Error("error de websocket")));
     });
     ws.close();
     const snap = messages[0] as SnapshotMessage;

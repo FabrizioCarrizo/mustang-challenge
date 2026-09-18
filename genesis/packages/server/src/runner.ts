@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { BudgetInfo, PacingInfo } from "@genesis/protocol";
-import { PACING_PRESETS, type Engine, type OpenedWorld, type PersistenceWriter, type TickOutput, type WorldDb } from "@genesis/engine";
+import { PACING_PRESETS, type Brain, type Engine, type OpenedWorld, type PersistenceWriter, type TickOutput, type WorldDb } from "@genesis/engine";
 
 export interface RunnerEvents {
   tick: [TickOutput];
@@ -34,6 +34,10 @@ export class Runner extends EventEmitter<RunnerEvents> {
   budgetProvider: (() => BudgetInfo) | null = null;
   /** freno externo: si devuelve true, el mundo espera (ej. cola de planes atrasada) */
   backpressure: (() => boolean) | null = null;
+  /** cerebro conectado (System 2), si hay */
+  brain: Brain | null = null;
+  /** en corridas headless: cada cuántos ticks ceder el hilo para que resuelvan las promesas (0 = nunca) */
+  yieldEvery = 0;
 
   constructor(world: OpenedWorld, opts: { preset?: string; multiplier?: number; simDayRealSeconds?: number } = {}) {
     super();
@@ -88,6 +92,7 @@ export class Runner extends EventEmitter<RunnerEvents> {
     if (!def) return;
     this.preset = name;
     this.simDayRealSeconds = def.simDayRealSeconds;
+    this.brain?.setDensity(def.callDensity);
     this.emit("notice", { level: "info", text: `Preset de ritmo: ${name} (${def.description})` });
   }
 
@@ -113,12 +118,15 @@ export class Runner extends EventEmitter<RunnerEvents> {
     this.emit("snapshot", r);
   }
 
-  /** Corre N días a máxima velocidad de forma síncrona (uso headless). */
-  runDays(days: number, onDay?: (day: number, out: TickOutput) => void): void {
+  /** Corre N días a máxima velocidad (uso headless), cediendo el hilo para que el cerebro resuelva. */
+  async runDays(days: number, onDay?: (day: number, out: TickOutput) => void): Promise<void> {
     const tpd = this.engine.config.time.ticksPerDay;
     for (let d = 0; d < days; d++) {
       let last: TickOutput | null = null;
-      for (let t = 0; t < tpd; t++) last = this.step();
+      for (let t = 0; t < tpd; t++) {
+        last = this.step();
+        if (this.yieldEvery > 0 && t % this.yieldEvery === 0) await new Promise<void>((r) => setImmediate(r));
+      }
       onDay?.(d + 1, last!);
     }
     this.writer.flush();
@@ -146,6 +154,7 @@ export class Runner extends EventEmitter<RunnerEvents> {
   async stop(): Promise<void> {
     this.stopping = true;
     this.pause();
+    this.brain?.stop();
     this.takeSnapshot();
     this.db.close();
   }

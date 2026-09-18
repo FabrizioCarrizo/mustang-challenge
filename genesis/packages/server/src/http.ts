@@ -151,7 +151,21 @@ export async function createHttpServer(runner: Runner, broadcaster: Broadcaster,
     runner.db.listSnapshots().map((r) => ({ tick: r.tick, bytes: r.bytes, agents: r.agents, hash: r.state_hash, createdAt: r.created_at })),
   );
 
-  app.get("/api/cost", async () => ext.cost?.() ?? emptyCost());
+  app.get("/api/cost", async () => ext.cost?.() ?? runner.brain?.costInfo() ?? emptyCost());
+
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/api/agents/:id/conversations", async (req) => {
+    const id = Number(req.params.id);
+    return runner.db.conversationsOf(id, Math.min(100, Number(req.query.limit ?? 20))).map((r) => ({
+      id: Number(r.id),
+      tick: Number(r.tick),
+      aId: Number(r.a_id),
+      bId: Number(r.b_id),
+      aName: e().names.name(Number(r.a_id)),
+      bName: e().names.name(Number(r.b_id)),
+      turns: JSON.parse(String(r.turns)),
+      outcomes: JSON.parse(String(r.outcomes)),
+    }));
+  });
 
   app.post<{ Body: { action: string; value?: number | string } }>("/api/control", async (req) => {
     applyControl(runner, req.body.action, req.body.value);

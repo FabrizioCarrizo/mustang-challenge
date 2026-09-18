@@ -3,7 +3,9 @@ import { createAgent, inv, resetDailyCounters, type Agent } from "../agents/agen
 import { clamp01 } from "../agents/needs.ts";
 import { executeAction, startAction, type ActionContext } from "../cognition/system1/actions.ts";
 import { decide, type DecisionContext, type Perception } from "../cognition/system1/utility.ts";
-import { loadConfig, ticksPerHour, type GenesisConfig, type GenesisConfigInput } from "../config.ts";
+import { advancePlan, planCandidate } from "../cognition/system2/plans.ts";
+import { dropDeadHolder } from "../society/beliefs.ts";
+import { loadConfig, ticksPerHour, ticksPerYear, type GenesisConfig, type GenesisConfigInput } from "../config.ts";
 import { recordObservations } from "../memory/observe.ts";
 import { collectMetrics } from "../metrics/collector.ts";
 import { RngStreams } from "../rng.ts";
@@ -85,6 +87,7 @@ export class Engine {
       counters: { agent: 1, structure: 1, memory: 1, group: 1, belief: 1, text: 1, milestone: 1, request: 1 },
       rng,
       today: emptyDayStats(),
+      yesterday: emptyDayStats(),
       totals: { births: 0, deaths: 0, violence: 0, trades: 0, usd: 0, llmCalls: 0 },
       lastFieldTick: 0,
       shelterDirty: true,
@@ -92,6 +95,7 @@ export class Engine {
       epoch: "Edad del Hambre",
       milestones: new Map(),
       pendingMemories: [],
+      beliefs: new Map(),
     };
     const engine = new Engine(state);
     engine.populate(config.world.initialPopulation);
@@ -165,7 +169,11 @@ export class Engine {
       if (!inBounds(grid.size, x, y)) continue;
       const i = idx(grid.size, x, y);
       if (!isWalkable(grid.terrain[i]!) || grid.occupants[i]! >= 2) continue;
-      const a = this.spawnAgent(x, y, {});
+      // los primeros seres nacen adultos, con edades variadas
+      const life = this.s.config.life;
+      const perYear = ticksPerYear(this.s.config);
+      const ageYears = life.adultAgeYears + rng.float() * (life.fertileToYears - life.adultAgeYears);
+      const a = this.spawnAgent(x, y, { bornTick: -Math.round(ageYears * perYear) });
       const genomeRng = this.s.rng.get("genome");
       a.inventory.set("comida", 1 + genomeRng.int(3));
       if (genomeRng.chance(0.1)) a.knows.add("fuego");
@@ -189,6 +197,11 @@ export class Engine {
 
   emit(e: WorldEvent): void {
     this.events.push(e);
+  }
+
+  /** Eventos emitidos en el tick en curso (para disparadores). */
+  get currentEvents(): WorldEvent[] {
+    return this.events;
   }
 
   markResource(cell: number): void {
@@ -299,16 +312,31 @@ export class Engine {
       shelterChanged: () => {
         s.shelterDirty = true;
       },
+      learn: (ag, tech, how) => this.learn(ag, tech, how),
+      onTrade: () => {
+        s.today.trades++;
+        s.totals.trades++;
+      },
     };
     const shelterExists = s.structures.size > 0;
     const scratch: number[] = [];
     for (const id of s.alive) {
       const a = s.agents.get(id)!;
       if (a.health <= 0) continue;
+      // charla en curso (System 2): se queda quieto hasta que llegue la respuesta o venza
+      if (a.conversingUntil >= s.tick) {
+        a.needs.social = clamp01(a.needs.social + 0.004);
+        continue;
+      }
+      if (a.conversingUntil !== -1) {
+        a.conversingUntil = -1;
+        a.conversingWith = null;
+      }
       const p = this.perceive(a, scratch);
       if (a.asleep) {
         if (!this.shouldWake(a, p)) continue;
         a.asleep = false;
+        a.reflectedThisSleep = false;
         a.current = null;
       }
       const dctx: DecisionContext = {
@@ -320,6 +348,7 @@ export class Engine {
         rng: s.rng.get("s1"),
         perception: p,
         shelterExists,
+        planCandidate: a.plan.length ? planCandidate(a, s) : null,
       };
       const c = decide(a, dctx);
       const cur = a.current;
@@ -329,10 +358,15 @@ export class Engine {
         cur.targetId === c.targetId &&
         cur.resource === c.resource &&
         cur.structureKind === c.structureKind &&
+        (cur.item ?? null) === c.item &&
         (cur.ticksLeft > 0 || cur.verb === "construir" || cur.verb === "dormir");
       if (!sameAction) startAction(a, c, s.tick);
       const done = executeAction(a, actx, a.current && a.current.verb === c.verb ? c.field : null);
-      if (done) a.current = null;
+      if (done) {
+        const finished = a.current;
+        a.current = null;
+        if (finished?.fromPlan) advancePlan(a, finished);
+      }
       this.serendipity(a);
     }
 
@@ -364,6 +398,7 @@ export class Engine {
 
   private startNewDay(): void {
     const s = this.s;
+    s.yesterday = s.today;
     s.today = emptyDayStats();
     for (const id of s.alive) resetDailyCounters(s.agents.get(id)!);
     // obras abandonadas (dueño muerto o sin avance en 3 días) se desmoronan
@@ -613,6 +648,13 @@ export class Engine {
     a.diedTick = s.tick;
     a.asleep = false;
     a.current = null;
+    a.conversingUntil = -1;
+    a.conversingWith = null;
+    dropDeadHolder(s, id);
+    if (a.bondedTo !== null) {
+      const partner = s.agents.get(a.bondedTo);
+      if (partner && partner.bondedTo === id) partner.bondedTo = null;
+    }
     s.alive = s.alive.filter((v) => v !== id);
     const i = idx(s.grid.size, a.x, a.y);
     if (s.grid.occupants[i]! > 0) s.grid.occupants[i] = s.grid.occupants[i]! - 1;

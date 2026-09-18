@@ -2,6 +2,7 @@ import { RESOURCES, type ResourceKind } from "@genesis/protocol";
 import type { Agent, Memory, Relationship, CurrentAction, PlanStep } from "../agents/agent.ts";
 import { loadConfig, type GenesisConfig } from "../config.ts";
 import { RngStreams, type RngState } from "../rng.ts";
+import type { Belief } from "../society/beliefs.ts";
 import type { ClimateState } from "../world/climate.ts";
 import { createGrid, idx } from "../world/grid.ts";
 import { recomputeResourceFields } from "../world/resources.ts";
@@ -11,13 +12,14 @@ import type { Counters, DayStats, EngineState } from "./state.ts";
 
 export const SNAPSHOT_VERSION = 1;
 
-interface SerializedAgent extends Omit<Agent, "inventory" | "relationships" | "knows" | "beliefs" | "firsts" | "memories"> {
+interface SerializedAgent extends Omit<Agent, "inventory" | "relationships" | "knows" | "beliefs" | "firsts" | "memories" | "lastDialogueWith"> {
   inventory: Array<[string, number]>;
   relationships: Array<[number, Relationship]>;
   knows: string[];
   beliefs: Array<[number, number]>;
   firsts: string[];
   memories: Memory[];
+  lastDialogueWith: Array<[number, number]>;
 }
 
 interface SerializedStructure extends Omit<Structure, "contents"> {
@@ -48,11 +50,17 @@ export interface SnapshotData {
   counters: Counters;
   rng: Record<string, RngState>;
   today: DayStats;
+  yesterday?: DayStats;
   totals: EngineState["totals"];
   takenNames: string[];
   epoch: string;
   milestones: Array<[string, number]>;
   lastFieldTick: number;
+  beliefs: SerializedBelief[];
+}
+
+interface SerializedBelief extends Omit<Belief, "holders"> {
+  holders: Array<[number, number]>;
 }
 
 function b64(arr: Uint8Array | Float32Array | Int32Array | Uint16Array): string {
@@ -91,6 +99,10 @@ export function serializeAgent(a: Agent): SerializedAgent {
     beliefs: [...a.beliefs.entries()],
     firsts: [...a.firsts],
     memories: a.memories.map((m) => ({ ...m, tags: m.tags.slice(), refs: m.refs.slice() })),
+    lastDialogueWith: [...a.lastDialogueWith.entries()],
+    socialWishes: a.socialWishes.slice(),
+    cardCache: null,
+    pendingThoughts: 0,
     current: a.current ? ({ ...a.current } as CurrentAction) : null,
     plan: a.plan.map((p) => ({ ...p }) as PlanStep),
     home: a.home ? { ...a.home } : null,
@@ -111,6 +123,10 @@ export function deserializeAgent(d: SerializedAgent): Agent {
     beliefs: new Map(d.beliefs),
     firsts: new Set(d.firsts),
     memories: d.memories.map((m) => ({ ...m })),
+    lastDialogueWith: new Map(d.lastDialogueWith ?? []),
+    socialWishes: (d.socialWishes ?? []).slice(),
+    cardCache: null,
+    pendingThoughts: 0,
     current: d.current ? { ...d.current } : null,
     plan: d.plan.map((p) => ({ ...p })),
     home: d.home ? { ...d.home } : null,
@@ -154,11 +170,13 @@ export function serializeState(s: EngineState): SnapshotData {
     counters: { ...s.counters },
     rng: s.rng.state(),
     today: { ...s.today },
+    yesterday: { ...s.yesterday },
     totals: { ...s.totals },
     takenNames: [...s.takenNames],
     epoch: s.epoch,
     milestones: [...s.milestones.entries()],
     lastFieldTick: s.lastFieldTick,
+    beliefs: [...s.beliefs.values()].map((b) => ({ ...b, explains: b.explains.slice(), holders: [...b.holders.entries()] })),
   };
 }
 
@@ -209,6 +227,7 @@ export function deserializeState(d: SnapshotData): EngineState {
     counters: { ...d.counters },
     rng,
     today: { ...d.today },
+    yesterday: d.yesterday ? { ...d.yesterday } : { births: 0, deaths: 0, violence: 0, trades: 0, gifts: 0, dialogues: 0, llmCalls: 0, usd: 0 },
     totals: { ...d.totals },
     lastFieldTick: d.lastFieldTick,
     shelterDirty: true,
@@ -216,6 +235,7 @@ export function deserializeState(d: SnapshotData): EngineState {
     epoch: d.epoch,
     milestones: new Map(d.milestones),
     pendingMemories: [],
+    beliefs: new Map((d.beliefs ?? []).map((b) => [b.id, { ...b, explains: b.explains.slice(), holders: new Map(b.holders) }])),
   };
   recomputeResourceFields(grid);
   return state;

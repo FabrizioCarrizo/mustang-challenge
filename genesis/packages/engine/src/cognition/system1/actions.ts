@@ -20,6 +20,9 @@ export interface ActionContext {
   nextStructureId: () => number;
   resourceChanged: (cellIdx: number) => void;
   shelterChanged: () => void;
+  /** enseñar una técnica (lo resuelve el motor: eventos, hitos) */
+  learn?: (a: Agent, tech: string, how: string) => void;
+  onTrade?: (a: Agent, b: Agent, gave: Record<string, number>, got: Record<string, number>) => void;
 }
 
 export function startAction(a: Agent, c: Candidate, tick: number): CurrentAction {
@@ -30,15 +33,61 @@ export function startAction(a: Agent, c: Candidate, tick: number): CurrentAction
     targetId: c.targetId,
     resource: c.resource,
     structureKind: c.structureKind,
+    item: c.item,
+    amount: c.amount,
     ticksLeft: c.ticks,
     startedTick: tick,
     progress: 0,
     reason: c.reason,
-    fromPlan: false,
+    fromPlan: c.fromPlan,
     heading: a.current?.heading ?? 0,
   };
   a.current = cur;
   return cur;
+}
+
+function adjacentTarget(a: Agent, ctx: ActionContext, cur: CurrentAction): Agent | null | "moving" {
+  const other = cur.targetId !== null ? ctx.agents.get(cur.targetId) : undefined;
+  if (!other || other.diedTick !== null) return null;
+  if (Math.max(Math.abs(other.x - a.x), Math.abs(other.y - a.y)) <= 1) return other;
+  const d = Math.max(Math.abs(other.x - a.x), Math.abs(other.y - a.y));
+  if (d > 40 || ctx.clock.tick - cur.startedTick > 60) return null;
+  moveToward(a, ctx, other.x, other.y);
+  return "moving";
+}
+
+/** Trueque de System 1: intercambia una unidad de lo que a uno le sobra por lo que al otro le falta. */
+export function barter(a: Agent, b: Agent, ctx: ActionContext): boolean {
+  const goods = ["comida", "madera", "piedra"] as const;
+  let give: (typeof goods)[number] | null = null;
+  let get: (typeof goods)[number] | null = null;
+  for (const g of goods) {
+    if (inv(a, g) >= 3 && inv(b, g) < 1 && !give) give = g;
+    if (inv(b, g) >= 3 && inv(a, g) < 1 && !get) get = g;
+  }
+  if (!give || !get || give === get) return false;
+  takeItem(a, give, 1);
+  takeItem(b, get, 1);
+  addItem(a, get, 1);
+  addItem(b, give, 1);
+  const tick = ctx.clock.tick;
+  adjustRelationship(a, b.id, tick, { trust: 0.03, affinity: 0.02, familiarity: 0.05 });
+  adjustRelationship(b, a.id, tick, { trust: 0.03, affinity: 0.02, familiarity: 0.05 });
+  ctx.events.push(
+    makeEvent({
+      kind: "trade",
+      tick,
+      agentId: a.id,
+      targetId: b.id,
+      x: a.x,
+      y: a.y,
+      label: `${give}/${get}`,
+      data: { dio: `1 ${give}`, recibio: `1 ${get}`, gave: { [give]: 1 }, got: { [get]: 1 } },
+      tags: ["trueque"],
+    }),
+  );
+  ctx.onTrade?.(a, b, { [give]: 1 }, { [get]: 1 });
+  return true;
 }
 
 /** Ejecuta un tick de la acción en curso. Devuelve true si la acción terminó. */
@@ -240,17 +289,6 @@ export function executeAction(a: Agent, ctx: ActionContext, field: Uint16Array |
       }
       return false;
     }
-    case "ir_a": {
-      if (cur.targetId !== null) {
-        const other = ctx.agents.get(cur.targetId);
-        if (!other || other.diedTick !== null) return true;
-        cur.targetX = other.x;
-        cur.targetY = other.y;
-        if (Math.max(Math.abs(other.x - a.x), Math.abs(other.y - a.y)) <= 1) return true;
-      }
-      if (cur.targetX === null || cur.targetY === null) return true;
-      return moveToward(a, ctx, cur.targetX, cur.targetY);
-    }
     case "explorar": {
       if (cur.ticksLeft === 8 || ctx.rng.chance(0.12)) cur.heading = ctx.rng.int(8);
       const [dx, dy] = NEIGHBORS8[cur.heading]!;
@@ -261,7 +299,82 @@ export function executeAction(a: Agent, ctx: ActionContext, field: Uint16Array |
     }
     case "descansar": {
       a.needs.descanso = clamp01(a.needs.descanso + 0.003);
+      cur.ticksLeft--;
+      return cur.ticksLeft <= 0;
+    }
+    case "regalar": {
+      const other = adjacentTarget(a, ctx, cur);
+      if (other === "moving") return false;
+      if (!other) return true;
+      const item = cur.item ?? "comida";
+      const n = Math.min(inv(a, item), Math.max(1, cur.amount || 1));
+      if (n < 0.5) return true;
+      takeItem(a, item, n);
+      addItem(other, item, n);
+      adjustRelationship(a, other.id, tick, { affinity: 0.03, familiarity: 0.05, debt: 1 });
+      adjustRelationship(other, a.id, tick, { trust: 0.08, affinity: 0.1, familiarity: 0.05, debt: -1 });
+      ctx.events.push(
+        makeEvent({ kind: "gift", tick, agentId: a.id, targetId: other.id, x: a.x, y: a.y, label: item, data: { cantidad: Math.round(n) }, tags: ["regalo", "generosidad"] }),
+      );
+      markFirst(a, ctx, "regalar");
       return true;
+    }
+    case "ofrecer_trueque": {
+      const other = adjacentTarget(a, ctx, cur);
+      if (other === "moving") return false;
+      if (!other) return true;
+      barter(a, other, ctx);
+      return true;
+    }
+    case "enseñar": {
+      const other = adjacentTarget(a, ctx, cur);
+      if (other === "moving") return false;
+      if (!other) return true;
+      const tech = [...a.knows].find((k) => !other.knows.has(k) && k !== "refugio");
+      if (!tech) return true;
+      cur.ticksLeft--;
+      if (cur.ticksLeft > 0) return false;
+      const chance = 0.35 + 0.5 * other.genome.inteligencia + 0.15 * a.genome.empatia;
+      if (ctx.rng.chance(chance)) {
+        ctx.learn?.(other, tech, `porque ${a.name} le enseñó`);
+        ctx.events.push(makeEvent({ kind: "teach", tick, agentId: a.id, targetId: other.id, x: a.x, y: a.y, label: tech, importance: 5, tags: ["enseñanza", tech] }));
+        adjustRelationship(other, a.id, tick, { trust: 0.1, affinity: 0.08, familiarity: 0.08, debt: -1 });
+        adjustRelationship(a, other.id, tick, { affinity: 0.04, familiarity: 0.08, debt: 1 });
+        a.needs.estima = clamp01(a.needs.estima + 0.15);
+      }
+      return true;
+    }
+    case "rezar":
+    case "ritual": {
+      cur.ticksLeft--;
+      if (cur.ticksLeft > 0) return false;
+      ctx.events.push(
+        makeEvent({
+          kind: cur.verb === "ritual" ? "ritual" : "pray",
+          tick,
+          agentId: a.id,
+          x: a.x,
+          y: a.y,
+          label: cur.reason,
+          importance: cur.verb === "ritual" ? 4 : 3,
+          tags: ["rito", "fe"],
+        }),
+      );
+      a.needs.seguridad = clamp01(a.needs.seguridad + 0.05);
+      markFirst(a, ctx, cur.verb);
+      return true;
+    }
+    case "ir_a": {
+      if (cur.targetId !== null) {
+        const other = ctx.agents.get(cur.targetId);
+        if (!other || other.diedTick !== null) return true;
+        cur.targetX = other.x;
+        cur.targetY = other.y;
+        if (Math.max(Math.abs(other.x - a.x), Math.abs(other.y - a.y)) <= 1) return true;
+      }
+      if (field) return moveAlong(a, ctx, field);
+      if (cur.targetX === null || cur.targetY === null) return true;
+      return moveToward(a, ctx, cur.targetX, cur.targetY);
     }
     default:
       return true;

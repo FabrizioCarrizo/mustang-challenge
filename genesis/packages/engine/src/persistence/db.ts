@@ -288,6 +288,61 @@ export class WorldDb {
       );
   }
 
+  insertConversation(row: {
+    tick: number;
+    aId: number;
+    bId: number;
+    x: number;
+    y: number;
+    turns: Array<{ speaker: "A" | "B"; text: string }>;
+    outcomes: Array<{ tipo: string; detalle: string }>;
+    summaryA: string;
+    summaryB: string;
+  }): number {
+    const r = this.driver
+      .prepare("INSERT INTO conversations(tick, a_id, b_id, x, y, turns, outcomes, summary_a, summary_b) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(row.tick, row.aId, row.bId, row.x, row.y, JSON.stringify(row.turns), JSON.stringify(row.outcomes), row.summaryA, row.summaryB);
+    return Number(r.lastInsertRowid);
+  }
+
+  conversationsOf(agentId: number, limit = 20): Record<string, unknown>[] {
+    return this.driver.prepare("SELECT * FROM conversations WHERE a_id = ? OR b_id = ? ORDER BY id DESC LIMIT ?").all(agentId, agentId, limit);
+  }
+
+  countConversations(): number {
+    return Number(this.driver.prepare("SELECT COUNT(*) AS n FROM conversations").get()!.n);
+  }
+
+  insertText(row: { id: number; authorId: number | null; tick: number; title: string; body: string; medium: string; kind: string; x: number; y: number; techIds?: string[]; beliefId?: number | null }): void {
+    this.driver
+      .prepare("INSERT OR REPLACE INTO texts(id, author_id, tick, title, body, medium, kind, tech_ids, belief_id, x, y, holder_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(row.id, row.authorId, row.tick, row.title, row.body, row.medium, row.kind, JSON.stringify(row.techIds ?? []), row.beliefId ?? null, row.x, row.y, row.authorId);
+  }
+
+  texts(limit = 100): Record<string, unknown>[] {
+    return this.driver.prepare("SELECT * FROM texts ORDER BY tick DESC LIMIT ?").all(limit);
+  }
+
+  insertTrade(row: { tick: number; aId: number; bId: number; gave: Record<string, number>; got: Record<string, number>; x: number | null; y: number | null }): void {
+    this.driver
+      .prepare("INSERT INTO trades(tick, a_id, b_id, gave, got, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(row.tick, row.aId, row.bId, JSON.stringify(row.gave), JSON.stringify(row.got), row.x, row.y);
+  }
+
+  tradesSince(tick: number): Array<{ tick: number; a_id: number; b_id: number; gave: Record<string, number>; got: Record<string, number> }> {
+    return this.driver
+      .prepare("SELECT tick, a_id, b_id, gave, got FROM trades WHERE tick >= ? ORDER BY tick ASC")
+      .all(tick)
+      .map((r) => ({ tick: Number(r.tick), a_id: Number(r.a_id), b_id: Number(r.b_id), gave: JSON.parse(String(r.gave)) as Record<string, number>, got: JSON.parse(String(r.got)) as Record<string, number> }));
+  }
+
+  llmCallsByType(): Array<{ callType: string; calls: number; usd: number }> {
+    return this.driver
+      .prepare("SELECT call_type, COUNT(*) AS n, COALESCE(SUM(usd),0) AS usd FROM llm_calls GROUP BY call_type ORDER BY usd DESC")
+      .all()
+      .map((r) => ({ callType: String(r.call_type), calls: Number(r.n), usd: Number(r.usd) }));
+  }
+
   llmCallsOf(agentId: number, limit = 20): Record<string, unknown>[] {
     return this.driver.prepare("SELECT * FROM llm_calls WHERE agent_id = ? ORDER BY id DESC LIMIT ?").all(agentId, limit);
   }

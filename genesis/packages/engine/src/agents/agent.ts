@@ -24,6 +24,8 @@ export interface CurrentAction {
   targetId: number | null;
   resource: ResourceKind | null;
   structureKind: StructureKind | null;
+  item: ItemKind | null;
+  amount: number;
   ticksLeft: number;
   startedTick: number;
   progress: number;
@@ -36,14 +38,18 @@ export interface CurrentAction {
 export interface PlanStep {
   verbo: Verb;
   objetivo: string;
+  objetivoTipo: string;
   targetId: number | null;
   targetX: number | null;
   targetY: number | null;
   cantidad: number | null;
   hastaHora: number | null;
   prioridad: number;
+  motivo: string;
   done: boolean;
   attempts: number;
+  /** cantidad del ítem al empezar el paso (para saber si juntó lo pedido) */
+  startAmount: number | null;
 }
 
 export interface Memory {
@@ -112,6 +118,20 @@ export interface Agent {
   firsts: Set<string>;
   lastSpeech: string | null;
   lastSpeechTick: number;
+  /** ficha estable cacheada por día (System 2) */
+  cardCache: { day: number; text: string } | null;
+  /** seres con los que quiere hablar hoy (ids) */
+  socialWishes: number[];
+  conversingWith: number | null;
+  conversingUntil: number;
+  /** tick de la última charla con cada ser */
+  lastDialogueWith: Map<number, number>;
+  intention: string | null;
+  reactionsToday: number;
+  createdToday: number;
+  reflectedThisSleep: boolean;
+  /** número de pedidos System 2 en cola o en vuelo para este ser */
+  pendingThoughts: number;
 }
 
 export function createAgent(
@@ -177,6 +197,16 @@ export function createAgent(
     firsts: new Set(),
     lastSpeech: null,
     lastSpeechTick: -1,
+    cardCache: null,
+    socialWishes: [],
+    conversingWith: null,
+    conversingUntil: -1,
+    lastDialogueWith: new Map(),
+    intention: null,
+    reactionsToday: 0,
+    createdToday: 0,
+    reflectedThisSleep: false,
+    pendingThoughts: 0,
   };
 }
 
@@ -270,4 +300,23 @@ export function resetDailyCounters(a: Agent): void {
   a.callsToday = 0;
   a.tokensToday = 0;
   a.usdToday = 0;
+  a.reactionsToday = 0;
+  a.createdToday = 0;
+  a.socialWishes = [];
+}
+
+/** Crea una memoria y la deja pendiente de persistir. */
+export function remember(
+  s: { counters: { memory: number }; pendingMemories: Array<{ agentId: number; memory: Memory }>; tick: number },
+  a: Agent,
+  kind: Memory["kind"],
+  text: string,
+  importance: number,
+  tags: string[] = [],
+  refs: number[] = [],
+): Memory {
+  const m: Memory = { id: s.counters.memory++, tick: s.tick, kind, text, importance: Math.max(0, Math.min(10, importance)), tags, refs };
+  pushMemory(a, m);
+  s.pendingMemories.push({ agentId: a.id, memory: m });
+  return m;
 }
