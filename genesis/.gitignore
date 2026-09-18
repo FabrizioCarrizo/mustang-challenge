@@ -1,0 +1,10 @@
+node_modules/
+dist/
+worlds/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.snap.gz
+.env
+.playwright/
+test-results/

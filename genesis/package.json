@@ -1,0 +1,34 @@
+{
+  "name": "genesis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "GÉNESIS — simulación de civilización digital emergente que corre en tu Mac",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "genesis": "tsx packages/server/src/cli.ts",
+    "sim": "tsx packages/server/src/cli.ts run",
+    "serve": "tsx packages/server/src/cli.ts serve",
+    "replay": "tsx packages/server/src/cli.ts replay",
+    "brain:check": "tsx packages/server/src/cli.ts brain:check",
+    "cost": "tsx packages/server/src/cli.ts cost",
+    "doctor": "tsx packages/server/src/cli.ts doctor",
+    "dev": "concurrently -k -n server,dashboard -c blue,magenta \"npm run serve\" \"npm run dev -w @genesis/dashboard\"",
+    "build": "npm run build -w @genesis/dashboard",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -p packages/protocol && tsc -p packages/engine && tsc -p packages/server && tsc -p packages/dashboard"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "concurrently": "^10.0.5",
+    "tsx": "^4.23.13",
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.1"
+  }
+}
