@@ -32,6 +32,7 @@ export * from "./society/economy.ts";
 export * from "./society/laws.ts";
 export * from "./society/milestones.ts";
 export * from "./society/society.ts";
+export * from "./life/life.ts";
 export * from "./brain/provider.ts";
 export * from "./brain/anthropic.ts";
 export * from "./brain/ollama.ts";

@@ -71,7 +71,8 @@ export const MILESTONES: MilestoneSpec[] = [
   { key: "great_famine", title: "La gran hambruna", description: "Murieron de hambre cinco o más en tres días.", epoch: null, daily: (_s, c) => (c.hungerDeathsLast3Days >= 5 ? [] : null) },
   { key: "plague", title: "La peste", description: "La enfermedad recorrió las casas.", epoch: null, daily: (_s, c) => (c.sickLast3Days >= 6 ? [] : null) },
   { key: "population_100", title: "Cien seres", description: "La gente se multiplicó hasta el centenar.", epoch: null, daily: (s) => (s.alive.length >= 100 ? [] : null) },
-  { key: "first_legend", title: "La primera leyenda", description: "Un muerto siguió vivo en lo que se cuenta de él.", epoch: null, onEvent: (e) => (e.kind === "milestone" && e.label === "legend" ? actor(e) : null) },
+  { key: "first_legend", title: "La primera leyenda", description: "Un muerto siguió vivo en lo que se cuenta de él.", epoch: null, onEvent: (e) => (e.kind === "create" && e.data.tipo === "epopeya" ? actor(e) : null) },
+  { key: "first_chronicle", title: "La primera crónica", description: "Alguien, desde fuera del tiempo, empezó a contar esta historia.", epoch: null, onEvent: (e) => (e.kind === "create" && e.data.tipo === "cronica" ? [] : null) },
 ];
 
 export function epochRank(name: string): number {

@@ -10,13 +10,13 @@ import { membersAlive } from "../../society/groups.ts";
 import { seedNorm, type Society } from "../../society/society.ts";
 import { sanitizeInWorldText } from "./prompts/situation.ts";
 import { findAgentByName, markStepDoneByVerb, planFromOutput } from "./plans.ts";
-import type { Creation, DailyPlan, Dialogue, Govern, Reaction, Reflection } from "./schemas.ts";
+import type { Creation, DailyPlan, Dialogue, Govern, Heritage, Reaction, Reflection } from "./schemas.ts";
 
 export interface IntentSink {
   emit(e: WorldEvent): void;
   learn(a: Agent, tech: string, how: string): void;
   conversation(row: { tick: number; aId: number; bId: number; x: number; y: number; turns: Array<{ speaker: "A" | "B"; text: string }>; outcomes: Array<{ tipo: string; detalle: string }>; summaryA: string; summaryB: string }): number;
-  text(row: { authorId: number; tick: number; title: string; body: string; medium: string; kind: string; x: number; y: number }): number;
+  text(row: { authorId: number | null; tick: number; title: string; body: string; medium: string; kind: string; x: number; y: number }): number;
   /** intento de invención: devuelve la técnica descubierta o null */
   invent(a: Agent, recipe: { resultado: string; ingredientes: string[]; proceso: string }): string | null;
 }
@@ -461,6 +461,28 @@ export function applyCreate(a: Agent, s: EngineState, out: Creation, sink: Inten
   markStepDoneByVerb(a, "crear");
   markStepDoneByVerb(a, "escribir");
   sink.emit(makeEvent({ kind: "intent", tick: s.tick, agentId: a.id, x: a.x, y: a.y, label: `crear ${out.tipo}`, importance: 1, data: { type: "create", output: out }, persist: true }));
+}
+
+/** El legado que un ser recibe al nacer o al hacerse adulto. */
+export function applyHeritage(a: Agent, s: EngineState, out: Heritage, sink: IntentSink, stage: "nacimiento" | "adultez"): void {
+  const parts: string[] = [];
+  const ens = sanitizeInWorldText(out.enseñanzas, 700);
+  if (ens) parts.push(ens);
+  const valores = out.valores.map((v) => sanitizeInWorldText(v, 60)).filter(Boolean).slice(0, 6);
+  if (valores.length) parts.push(`Valores: ${valores.join("; ")}.`);
+  const tabues = out.tabues.map((v) => sanitizeInWorldText(v, 60)).filter(Boolean).slice(0, 4);
+  if (tabues.length) parts.push(`Tabúes: ${tabues.join("; ")}.`);
+  const origen = out.relato_origen ? sanitizeInWorldText(out.relato_origen, 300) : "";
+  if (origen) parts.push(`De dónde venimos: ${origen}`);
+  const text = parts.join(" ").slice(0, 900);
+  if (stage === "nacimiento" || !a.culturalGenome) a.culturalGenome = text;
+  else a.culturalGenome = `${a.culturalGenome} ${text}`.slice(0, 1200);
+  a.cardCache = null;
+  remember(s, a, "reflexion", stage === "nacimiento" ? `Lo que me enseñaron: ${ens.slice(0, 200)}` : `Lo que aprendí creciendo: ${ens.slice(0, 200)}`, 7, ["herencia", "identidad"]);
+  if (origen) {
+    holdBelief(s, a, { statement: origen.slice(0, 200), kind: "mito", confidence: 0.6, explains: ["origen", "nacimiento"] });
+  }
+  sink.emit(makeEvent({ kind: "intent", tick: s.tick, agentId: a.id, x: a.x, y: a.y, label: `heredar (${stage})`, importance: 1, data: { type: "heritage", output: out, stage }, persist: true }));
 }
 
 /** Un líder decide por su gente. */

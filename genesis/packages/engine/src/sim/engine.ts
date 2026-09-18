@@ -5,6 +5,7 @@ import { clamp01 } from "../agents/needs.ts";
 import { executeAction, startAction, type ActionContext } from "../cognition/system1/actions.ts";
 import { decide, type DecisionContext, type Perception } from "../cognition/system1/utility.ts";
 import { advancePlan, planCandidate } from "../cognition/system2/plans.ts";
+import { dailyLife, inherit, stepBirths } from "../life/life.ts";
 import { dropDeadHolder } from "../society/beliefs.ts";
 import { loadConfig, ticksPerHour, ticksPerYear, type GenesisConfig, type GenesisConfigInput } from "../config.ts";
 import { recordObservations } from "../memory/observe.ts";
@@ -65,6 +66,7 @@ export class Engine {
   private resourceChanged = new Set<number>();
   private structuresChanged = new Set<number>();
   private removedStructures: number[] = [];
+  private tickDeaths: number[] = [];
   readonly names: NameResolver;
   hooks: EngineHooks = {};
   /** sociedad enganchada (detectores, leyes, crímenes) */
@@ -298,6 +300,7 @@ export class Engine {
     this.resourceChanged.clear();
     this.structuresChanged.clear();
     this.removedStructures = [];
+    this.tickDeaths = [];
 
     s.tick++;
     s.clock = computeClock(s.tick, cfg);
@@ -420,8 +423,10 @@ export class Engine {
     // memoria y choques
     recordObservations(s, this.events, this.spatial, this.names);
 
-    // muertes
+    // muertes y nacimientos
     for (const id of deaths) this.kill(id);
+    stepBirths(this);
+    if (clock.isNewDay) dailyLife(this);
 
     if (s.shelterDirty) this.recomputeShelter();
 
@@ -435,7 +440,7 @@ export class Engine {
       newDay: clock.isNewDay,
       newHour,
       metrics,
-      deaths,
+      deaths: this.tickDeaths,
     };
     this.hooks.afterTick?.(this, out);
     return out;
@@ -606,7 +611,7 @@ export class Engine {
     }
     if (a.disease > 0) damage += 0.004 / tph;
     if (damage > 0) a.health -= damage;
-    else if (a.health < 1 && needs.sed > 0.3 && needs.hambre > 0.3 && needs.calor > 0.3) {
+    else if (a.health > 0 && a.health < 1 && needs.sed > 0.3 && needs.hambre > 0.3 && needs.calor > 0.3) {
       a.health = Math.min(1, a.health + cfg.needs.healPerHour / tph);
       if (a.injuries > 0) a.injuries = Math.max(0, a.injuries - cfg.needs.healPerHour / tph);
     }
@@ -703,6 +708,7 @@ export class Engine {
     const s = this.s;
     const a = s.agents.get(id);
     if (!a || a.diedTick !== null) return;
+    this.tickDeaths.push(id);
     a.diedTick = s.tick;
     a.asleep = false;
     a.current = null;
@@ -716,13 +722,19 @@ export class Engine {
     s.alive = s.alive.filter((v) => v !== id);
     const i = idx(s.grid.size, a.x, a.y);
     if (s.grid.occupants[i]! > 0) s.grid.occupants[i] = s.grid.occupants[i]! - 1;
-    // sus pertenencias quedan en el lugar
-    for (const r of RESOURCES) {
-      const n = a.inventory.get(r as ResourceKind) ?? 0;
-      if (n > 0) {
-        s.grid.resources[r][i] = s.grid.resources[r][i]! + n;
-        this.resourceChanged.add(i);
+    // herencia: pareja o hijo mayor; si no hay, las pertenencias quedan en el lugar
+    const heir = inherit(this, a);
+    if (!heir) {
+      for (const r of RESOURCES) {
+        const n = a.inventory.get(r as ResourceKind) ?? 0;
+        if (n > 0) {
+          s.grid.resources[r][i] = s.grid.resources[r][i]! + n;
+          this.resourceChanged.add(i);
+        }
       }
+    }
+    for (const st of s.structures.values()) {
+      if (st.ownerId === id) st.ownerId = heir?.id ?? null;
     }
     s.today.deaths++;
     s.totals.deaths++;
@@ -735,8 +747,8 @@ export class Engine {
         y: a.y,
         label: a.causeOfDeath ?? "causas desconocidas",
         importance: 8,
-        data: { age: this.ageYears(a) },
-        tags: ["muerte", a.causeOfDeath ?? "muerte"],
+        data: { age: this.ageYears(a), heirId: heir?.id ?? null },
+        tags: ["muerte", (a.causeOfDeath ?? "muerte").split(" ")[0]!],
       }),
     );
     this.rebuildSpatial();

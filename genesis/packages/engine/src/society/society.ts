@@ -388,7 +388,7 @@ export class Society {
     }
     for (const [id, n] of this.speeches) this.speeches.set(id, n * 0.7);
     for (const [id, n] of this.netGifts) this.netGifts.set(id, n * 0.9);
-    this.issues = this.issues.filter((i) => i.tick >= tick - tpd * 3);
+    this.issues = this.issues.filter((i) => i.tick >= tick - tpd * 7);
 
     this.detectGroups();
     this.detectLeaders();
@@ -498,11 +498,11 @@ export class Society {
       const sorted = [...d.entries()].filter(([id]) => s.agents.get(id)?.diedTick === null).sort((p, q) => q[1] - p[1]);
       const [top, second] = [sorted[0], sorted[1]];
       if (!top) continue;
-      const qualifies = top[1] >= 1.5 * (second?.[1] ?? 0) && top[1] >= 0.4 * alive.length;
+      const qualifies = top[1] >= 1.3 * (second?.[1] ?? 0) && top[1] >= 0.2 * alive.length;
       const streak = qualifies ? (g.leaderStreak.get(top[0]) ?? 0) + 1 : 0;
       g.leaderStreak.clear();
       if (qualifies) g.leaderStreak.set(top[0], streak);
-      if (qualifies && streak >= 3 && g.leaderId !== top[0]) {
+      if (qualifies && streak >= 2 && g.leaderId !== top[0]) {
         g.leaderId = top[0];
         g.leaderSinceTick = s.tick;
         this.engine.emit(makeEvent({ kind: "leader", tick: s.tick, agentId: top[0], label: g.name, importance: 6, data: { groupId: g.id }, tags: ["lider", "tribu"] }));

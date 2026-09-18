@@ -239,6 +239,23 @@ export function decide(a: Agent, ctx: DecisionContext): Candidate {
     }
   }
 
+  // --- familia: alimentar a los hijos chicos y seguir a la madre ---
+  for (const cid of a.children) {
+    const child = ctx.agents.get(cid);
+    if (!child || child.diedTick !== null) continue;
+    const d = Math.max(Math.abs(child.x - a.x), Math.abs(child.y - a.y));
+    if (child.needs.hambre < 0.5 && food >= 1 && d <= 8) {
+      cands.push(cand("regalar", 0.5 + (1 - child.needs.hambre) * 0.6 - distCost(d), `alimento a ${child.name}`, { targetId: child.id, item: "comida", amount: 1 }));
+    }
+  }
+  if (a.parents[0] !== null && (clock.tick - a.bornTick) < 48 * 144) {
+    const mother = ctx.agents.get(a.parents[0]) ?? (a.parents[1] !== null ? ctx.agents.get(a.parents[1]) : undefined);
+    if (mother && mother.diedTick === null) {
+      const d = Math.max(Math.abs(mother.x - a.x), Math.abs(mother.y - a.y));
+      if (d > 3) cands.push(cand("ir_a", 0.35 + Math.min(0.4, d / 20), "sigo a mi madre", { targetId: mother.id, targetX: mother.x, targetY: mother.y }));
+    }
+  }
+
   // --- explorar / vagar ---
   cands.push(cand("explorar", 0.04 + a.genome.curiosidad * 0.14 + (clock.isDay ? 0.03 : -0.1), "curioseo", { ticks: 8 }));
 

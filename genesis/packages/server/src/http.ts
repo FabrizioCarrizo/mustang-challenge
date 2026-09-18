@@ -180,6 +180,39 @@ export async function createHttpServer(runner: Runner, broadcaster: Broadcaster,
 
   app.get("/api/cost", async () => ext.cost?.() ?? runner.brain?.costInfo() ?? emptyCost());
 
+  app.get<{ Querystring: { limit?: string } }>("/api/chronicle", async (req) =>
+    runner.db.chronicle(Math.min(500, Number(req.query.limit ?? 100))).map((r) => ({
+      id: Number(r.id),
+      tickFrom: Number(r.tick_from),
+      tickTo: Number(r.tick_to),
+      title: String(r.title),
+      body: String(r.body),
+      kind: String(r.kind),
+      themes: JSON.parse(String(r.themes)) as string[],
+      protagonists: JSON.parse(String(r.protagonists)) as string[],
+    })),
+  );
+
+  app.get<{ Params: { id: string } }>("/api/agents/:id/family", async (req, reply) => {
+    const a = e().s.agents.get(Number(req.params.id));
+    if (!a) return reply.code(404).send({ error: "no existe ese ser" });
+    const s = e().s;
+    const node = (id: number | null) => {
+      if (id === null) return null;
+      const x = s.agents.get(id);
+      return x ? { id: x.id, name: x.name, sex: x.sex, alive: x.diedTick === null, bornTick: x.bornTick, diedTick: x.diedTick } : null;
+    };
+    return {
+      self: node(a.id),
+      partner: node(a.bondedTo),
+      parents: a.parents.map(node),
+      grandparents: a.parents.flatMap((p) => (p !== null ? (s.agents.get(p)?.parents.map(node) ?? []) : [])),
+      children: a.children.map(node),
+      grandchildren: a.children.flatMap((c) => s.agents.get(c)?.children.map(node) ?? []),
+      siblings: [...new Set(a.parents.flatMap((p) => (p !== null ? (s.agents.get(p)?.children ?? []) : [])))].filter((id) => id !== a.id).map(node),
+    };
+  });
+
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>("/api/agents/:id/conversations", async (req) => {
     const id = Number(req.params.id);
     return runner.db.conversationsOf(id, Math.min(100, Number(req.query.limit ?? 20))).map((r) => ({
