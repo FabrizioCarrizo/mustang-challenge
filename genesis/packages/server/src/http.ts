@@ -282,8 +282,13 @@ export async function createHttpServer(runner: Runner, broadcaster: Broadcaster,
           client.focusAgentId = msg.agentId;
           break;
         case "god": {
-          const pending = ext.god ? Promise.resolve(ext.god(msg.action)) : runner.god(msg.action);
-          void pending.then((r) => client.send(JSON.stringify({ t: "notice", level: r.ok ? "info" : "warn", text: r.message ?? (r.ok ? "Hecho" : "No se pudo") })));
+          // el runner ya avisa a todos los clientes con un `notice`; solo un manejador externo necesita respuesta directa
+          if (ext.god) {
+            const r = ext.god(msg.action);
+            client.send(JSON.stringify({ t: "notice", level: r.ok ? "info" : "warn", text: r.message ?? (r.ok ? "Hecho" : "No se pudo") }));
+          } else {
+            void runner.god(msg.action);
+          }
           break;
         }
         case "replay": {

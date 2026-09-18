@@ -36,6 +36,8 @@ export interface SocietyLike {
   crimes: Crime[];
   pendingCrimeFor(agentId: number): Crime | null;
   punish(crime: Crime, by: Agent): { punishment: Punishment; victimId: number | null } | null;
+  /** tribus vigentes (para las métricas) */
+  activeGroupCount(): number;
 }
 
 export interface TickOutput {
@@ -451,7 +453,12 @@ export class Engine {
     // huella diaria del estado, para verificar replays
     if (clock.isNewDay) this.events.push(makeEvent({ kind: "state.hash", tick: s.tick, label: this.hash(), importance: 0, persist: true }));
 
-    const metrics = newHour ? collectMetrics(s) : null;
+    const metrics = newHour
+      ? collectMetrics(s, {
+          groups: this.society?.activeGroupCount() ?? 0,
+          beliefs: [...s.beliefs.values()].filter((b) => b.holders.size > 0).length,
+        })
+      : null;
     const out: TickOutput = {
       tick: s.tick,
       events: this.events,

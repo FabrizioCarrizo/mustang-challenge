@@ -107,6 +107,12 @@ export class Society {
 
   // ------------------------------------------------------------ consultas
 
+  activeGroupCount(): number {
+    let n = 0;
+    for (const g of this.groups.values()) if (g.dissolvedTick === null) n++;
+    return n;
+  }
+
   groupOf(agentId: number): Group | null {
     const a = this.s.agents.get(agentId);
     if (!a || a.groupId === null) return null;
