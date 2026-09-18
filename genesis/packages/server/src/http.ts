@@ -145,7 +145,34 @@ export async function createHttpServer(runner: Runner, broadcaster: Broadcaster,
     }),
   );
 
-  app.get("/api/milestones", async () => broadcaster.milestonesProvider?.() ?? []);
+  app.get("/api/milestones", async () => runner.society.milestonesInfo());
+
+  app.get("/api/society/groups", async () => runner.society.groupsInfo());
+  app.get("/api/society/leaders", async () =>
+    runner.society
+      .groupsInfo()
+      .filter((g) => g.leaderId !== null)
+      .map((g) => ({ groupId: g.id, groupName: g.name, leaderId: g.leaderId, leaderName: e().names.name(g.leaderId), members: g.members.length })),
+  );
+  app.get("/api/society/economy", async () => runner.society.economyInfo());
+  app.get("/api/society/beliefs", async () => runner.society.beliefsInfo());
+  app.get("/api/society/tech", async () => runner.society.techInfo());
+  app.get("/api/society/laws", async () => runner.society.lawsInfo());
+  app.get<{ Querystring: { limit?: string } }>("/api/society/texts", async (req) => runner.society.textsInfo(Math.min(500, Number(req.query.limit ?? 100))));
+  app.get("/api/society/crimes", async () =>
+    runner.society.crimes.slice(-100).map((c) => ({
+      id: c.id,
+      tick: c.tick,
+      criminalId: c.criminalId,
+      criminalName: e().names.name(c.criminalId),
+      victimId: c.victimId,
+      victimName: c.victimId !== null ? e().names.name(c.victimId) : null,
+      verb: c.verb,
+      punished: c.punished,
+      lawId: c.lawId,
+      groupId: c.groupId,
+    })),
+  );
 
   app.get("/api/snapshots", async (): Promise<SnapshotListItem[]> =>
     runner.db.listSnapshots().map((r) => ({ tick: r.tick, bytes: r.bytes, agents: r.agents, hash: r.state_hash, createdAt: r.created_at })),

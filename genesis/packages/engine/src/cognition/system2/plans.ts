@@ -4,6 +4,7 @@ import { inv, type Agent, type CurrentAction, type PlanStep } from "../../agents
 import type { EngineState } from "../../sim/state.ts";
 import { NO_PATH, idx } from "../../world/grid.ts";
 import { STRUCTURE_SPECS } from "../../world/structures.ts";
+import { craftRecipeFor } from "../../society/tech.ts";
 import { cand, type Candidate } from "../system1/utility.ts";
 import type { DailyPlan } from "./schemas.ts";
 
@@ -163,17 +164,69 @@ export function planCandidate(a: Agent, s: EngineState): Candidate | null {
     }
     case "rezar":
       return cand("rezar", score, reason, { ...base, ticks: 3 });
-    case "ritual":
+    case "ritual": {
+      if (step.targetX !== null && step.targetY !== null) {
+        const d = Math.max(Math.abs(step.targetX - a.x), Math.abs(step.targetY - a.y));
+        if (d > 2) return cand("ir_a", score, reason, { ...base, targetX: step.targetX, targetY: step.targetY });
+      }
       return cand("ritual", score, reason, { ...base, ticks: 6 });
+    }
     case "explorar":
       return cand("explorar", score, reason, { ...base, ticks: 12 });
     case "descansar":
       return cand("descansar", score, reason, { ...base, ticks: 6 });
+    case "atacar":
+    case "robar": {
+      if (step.targetId === null) return giveUp(step);
+      const o = s.agents.get(step.targetId);
+      if (!o || o.diedTick !== null || Math.max(Math.abs(o.x - a.x), Math.abs(o.y - a.y)) > 30) return giveUp(step);
+      return cand(step.verbo, score, reason, { ...base, targetId: o.id, ticks: 1 });
+    }
+    case "castigar":
+      return cand("castigar", score, reason, { ...base, targetId: step.targetId, ticks: 1 });
+    case "reclamar":
+      return cand("reclamar", score, reason, { ...base, ticks: 1 });
+    case "fabricar": {
+      const item = itemKind(step.objetivo);
+      const recipe = item ? craftRecipeFor(item) : null;
+      if (!recipe || !a.knows.has(recipe.tech)) return giveUp(step);
+      for (const [it, n] of Object.entries(recipe.ingredients)) {
+        if (inv(a, it as ItemKind) < (n ?? 0)) {
+          const r = resourceKind(it);
+          if (r && g.dist[r][here] !== NO_PATH) return cand("juntar", score, `junto ${it} para fabricar ${item}`, { ...base, resource: r, field: g.dist[r], ticks: 3 });
+          return giveUp(step);
+        }
+      }
+      return cand("fabricar", score, reason, { ...base, item: recipe.item, ticks: recipe.work });
+    }
+    case "sembrar": {
+      if (!a.knows.has("agricultura")) return giveUp(step);
+      const spec = STRUCTURE_SPECS.granja;
+      for (const [item, n] of Object.entries(spec.materials)) {
+        if (inv(a, item as ItemKind) < (n ?? 0)) {
+          const r = resourceKind(item);
+          if (r && g.dist[r][here] !== NO_PATH) return cand("juntar", score, `junto ${item} para sembrar`, { ...base, resource: r, field: g.dist[r], ticks: 3 });
+          return giveUp(step);
+        }
+      }
+      const building = a.buildingId !== null ? s.structures.get(a.buildingId) : undefined;
+      if (building && building.progress < 1 && building.kind === "granja") {
+        return cand("construir", score + 0.1, reason, { ...base, structureKind: "granja", targetX: building.x, targetY: building.y, ticks: 24 });
+      }
+      return cand("construir", score, reason, { ...base, structureKind: "granja", ticks: 24 });
+    }
+    case "cuidar":
+      return cand("cuidar", score, reason, { ...base, ticks: 6 });
+    case "leer":
+      return cand("leer", score, reason, { ...base, ticks: 3 });
+    case "cargar_agua":
+      if (inv(a, "cantaro") < 1 || g.distWater[here] === NO_PATH) return giveUp(step);
+      return cand("cargar_agua", score, reason, { ...base, field: g.distWater, ticks: 1 });
     case "crear":
+    case "escribir":
       // la creación la dispara System 2; el paso se completa cuando se aplica
       return null;
     default:
-      // verbos que llegan en fases posteriores: se dan por hechos
       step.done = true;
       return null;
   }
@@ -214,11 +267,15 @@ export function advancePlan(a: Agent, done: CurrentAction): void {
       if (have >= target || have - step.startAmount >= target || step.attempts >= MAX_ATTEMPTS) step.done = true;
       break;
     }
-    case "construir": {
+    case "construir":
+    case "sembrar": {
       if (done.verb === "construir" && a.buildingId === null) step.done = true;
       else if (step.attempts >= MAX_ATTEMPTS * 3) step.done = true;
       break;
     }
+    case "fabricar":
+      if (done.verb === "fabricar" || step.attempts >= MAX_ATTEMPTS * 2) step.done = true;
+      break;
     case "conversar":
       if (done.verb === "conversar" || step.attempts >= MAX_ATTEMPTS) step.done = true;
       break;

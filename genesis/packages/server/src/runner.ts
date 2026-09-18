@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import type { BudgetInfo, PacingInfo } from "@genesis/protocol";
-import { PACING_PRESETS, type Brain, type Engine, type OpenedWorld, type PersistenceWriter, type TickOutput, type WorldDb } from "@genesis/engine";
+import { PACING_PRESETS, Society, type Brain, type Engine, type OpenedWorld, type PersistenceWriter, type TickOutput, type WorldDb } from "@genesis/engine";
 
 export interface RunnerEvents {
   tick: [TickOutput];
@@ -36,6 +36,8 @@ export class Runner extends EventEmitter<RunnerEvents> {
   backpressure: (() => boolean) | null = null;
   /** cerebro conectado (System 2), si hay */
   brain: Brain | null = null;
+  /** la sociedad: siempre enganchada (es física, no LLM) */
+  readonly society: Society;
   /** en corridas headless: cada cuántos ticks ceder el hilo para que resuelvan las promesas (0 = nunca) */
   yieldEvery = 0;
 
@@ -44,6 +46,9 @@ export class Runner extends EventEmitter<RunnerEvents> {
     this.engine = world.engine;
     this.db = world.db;
     this.writer = world.writer;
+    this.society = new Society(this.engine, this.db);
+    this.society.install();
+    this.engine.society = this.society;
     const cfgPacing = this.engine.config.pacing;
     this.preset = opts.preset ?? cfgPacing.preset;
     const presetDef = PACING_PRESETS[this.preset];

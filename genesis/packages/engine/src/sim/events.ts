@@ -44,6 +44,8 @@ export type EventKind =
   | "group"
   | "leader"
   | "currency"
+  | "religion"
+  | "craft"
   | "milestone"
   | "epoch"
   | "war"
@@ -256,6 +258,10 @@ export function describeEvent(e: WorldEvent, names: NameResolver, selfId: number
       return v(`Ahora lidero ${e.label}`, `lidera ${e.label}`);
     case "currency":
       return `${e.label} se convirtió en moneda`;
+    case "religion":
+      return `Nació una religión: ${e.label}`;
+    case "craft":
+      return v(`Fabriqué ${e.label}`, `fabricó ${e.label}`);
     case "milestone":
       return `${d.title ?? e.label}`;
     case "epoch":

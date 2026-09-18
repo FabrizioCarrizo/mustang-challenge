@@ -36,6 +36,9 @@ export class Broadcaster {
   constructor(private readonly runner: Runner) {
     runner.on("tick", (out) => this.onTick(out));
     runner.on("notice", (n) => this.broadcast({ t: "notice", level: n.level, text: n.text }));
+    this.groupsProvider = () => runner.society.groupsInfo();
+    this.milestonesProvider = () => runner.society.milestonesInfo();
+    this.groupNameOf = (id) => runner.society.groupNameOf(id);
     this.timer = setInterval(() => this.flush(), 100);
   }
 

@@ -50,6 +50,8 @@ export interface DecisionContext {
   shelterExists: boolean;
   /** candidato derivado del plan System 2 (si hay) */
   planCandidate?: Candidate | null;
+  /** crimen pendiente de castigo que este ser podría aplicar */
+  pendingCrime?: { criminalId: number } | null;
 }
 
 export function cand(verb: Verb, score: number, reason: string, extra: Partial<Candidate> = {}): Candidate {
@@ -96,13 +98,39 @@ export function decide(a: Agent, ctx: DecisionContext): Candidate {
   const knowsFire = a.knows.has("fuego");
   const commitment = a.current;
 
-  // --- beber ---
+  // --- beber (del agua o del cántaro) ---
+  if (inv(a, "agua") >= 1 && dWater > 0) {
+    cands.push(cand("beber", u.sed * (1 - a.needs.sed) * 1.3, "bebo del cántaro", { ticks: 1 }));
+  }
   cands.push(
     cand("beber", u.sed * (1 - a.needs.sed) * 1.2 - distCost(dWater), "tengo sed", {
       field: grid.distWater,
       ticks: 2,
     }),
   );
+  if (inv(a, "cantaro") >= 1 && inv(a, "agua") < 1 && dWater !== NO_PATH && dWater > 3) {
+    cands.push(cand("cargar_agua", 0.12 + u.sed * 0.3 - distCost(dWater), "lleno el cántaro", { field: grid.distWater, ticks: 1 }));
+  }
+
+  // --- violencia: responder a un ataque ---
+  if (a.lastAttackedBy !== null && clock.tick - a.lastAttackedTick <= 6) {
+    const attacker = ctx.agents.get(a.lastAttackedBy);
+    if (attacker && attacker.diedTick === null && Math.max(Math.abs(attacker.x - a.x), Math.abs(attacker.y - a.y)) <= 3) {
+      if (a.genome.agresion > 0.45 && a.health > 0.35) {
+        cands.push(cand("atacar", 0.55 + a.genome.agresion * 0.4 + (inv(a, "arma") >= 1 ? 0.15 : 0), "me defiendo", { targetId: attacker.id, ticks: 1 }));
+      }
+      cands.push(cand("huir", 0.5 + (1 - a.genome.riesgo) * 0.4 + (1 - a.health) * 0.5, "escapo del ataque", { targetX: attacker.x, targetY: attacker.y, ticks: 4 }));
+    }
+  }
+
+  // --- justicia: castigar un crimen ---
+  if (ctx.pendingCrime) {
+    const criminal = ctx.agents.get(ctx.pendingCrime.criminalId);
+    if (criminal && criminal.diedTick === null) {
+      const d = Math.max(Math.abs(criminal.x - a.x), Math.abs(criminal.y - a.y));
+      if (d <= 12) cands.push(cand("castigar", 0.45 + a.genome.agresion * 0.2 - distCost(d), "hago justicia", { targetId: criminal.id, ticks: 1 }));
+    }
+  }
 
   // --- comer de la mochila ---
   if (food >= 0.25) {
@@ -126,20 +154,20 @@ export function decide(a: Agent, ctx: DecisionContext): Candidate {
 
   // --- dormir ---
   {
-    const nightBonus = night ? 0.5 : 0;
     const tired = 1 - a.needs.descanso;
-    let s = u.descanso * tired + nightBonus * (a.needs.descanso < 0.75 ? 1 : 0.3);
+    let s = u.descanso * tired;
+    if (night) s = Math.max(s, a.needs.descanso < 0.98 ? 0.6 + 0.3 * tired : 0.4);
     if (a.needs.descanso < 0.15) s += 0.8;
     const atHome = a.home && a.home.x === a.x && a.home.y === a.y;
     if (a.home && !atHome && s > 0.2) {
       const d = Math.max(Math.abs(a.home.x - a.x), Math.abs(a.home.y - a.y));
-      if (d <= 20) {
+      if (d <= 36) {
         cands.push(
-          cand("dormir", s - distCost(d) + 0.15, "vuelvo a casa a dormir", { targetX: a.home.x, targetY: a.home.y, ticks: 40 }),
+          cand("dormir", s - d / 40 + 0.15, "vuelvo a casa a dormir", { targetX: a.home.x, targetY: a.home.y, ticks: 40 }),
         );
       }
     }
-    cands.push(cand("dormir", s - (a.home && !atHome ? 0.15 : 0), night ? "es de noche" : "estoy cansado", { ticks: 40 }));
+    cands.push(cand("dormir", s - (a.home && !atHome ? 0.2 : 0), night ? "es de noche" : "estoy cansado", { ticks: 40 }));
   }
 
   // --- calor: refugiarse, encender fuego, construir refugio, juntar leña ---

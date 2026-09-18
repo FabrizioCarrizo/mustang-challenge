@@ -10,7 +10,7 @@ export async function attachBrain(runner: Runner, mode: string): Promise<void> {
   const routes = buildRoutes(runner.engine.config, m);
   if (!routes) return;
   const density = PACING_PRESETS[runner.preset]?.callDensity ?? 1;
-  const brain = new Brain(runner.engine, routes, runner.db, { density });
+  const brain = new Brain(runner.engine, routes, runner.db, { density, society: runner.society });
   brain.install();
   runner.brain = brain;
   runner.budgetProvider = () => brain.budgetInfo();

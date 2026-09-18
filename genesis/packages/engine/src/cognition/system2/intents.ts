@@ -5,9 +5,12 @@ import { clamp01 } from "../../agents/needs.ts";
 import { makeEvent, type WorldEvent } from "../../sim/events.ts";
 import type { EngineState } from "../../sim/state.ts";
 import { holdBelief, reviseBelief, findSimilarBelief, beliefsOf } from "../../society/beliefs.ts";
+import type { Group } from "../../society/groups.ts";
+import { membersAlive } from "../../society/groups.ts";
+import { seedNorm, type Society } from "../../society/society.ts";
 import { sanitizeInWorldText } from "./prompts/situation.ts";
 import { findAgentByName, markStepDoneByVerb, planFromOutput } from "./plans.ts";
-import type { Creation, DailyPlan, Dialogue, Reaction, Reflection } from "./schemas.ts";
+import type { Creation, DailyPlan, Dialogue, Govern, Reaction, Reflection } from "./schemas.ts";
 
 export interface IntentSink {
   emit(e: WorldEvent): void;
@@ -420,9 +423,15 @@ export function applyCreate(a: Agent, s: EngineState, out: Creation, sink: Inten
       a.needs.estima = clamp01(a.needs.estima - 0.02);
     }
   } else {
-    const medium = out.tipo === "arte" ? "objeto" : out.tipo === "texto" && a.knows.has("escritura") ? "escrito" : "oral";
-    const textId = sink.text({ authorId: a.id, tick: s.tick, title, body, medium, kind: out.tipo, x: a.x, y: a.y });
+    let medium: "objeto" | "escrito" | "tallado" | "oral" = "oral";
+    if (out.tipo === "arte") medium = "objeto";
+    else if (out.tipo === "texto") medium = a.knows.has("escritura") && inv(a, "tablilla") >= 1 ? "escrito" : "tallado";
+    if (medium === "escrito") takeItem(a, "tablilla", 1);
+    const textId = sink.text({ authorId: a.id, tick: s.tick, title, body: medium === "tallado" ? body.slice(0, 120) : body, medium, kind: out.tipo, x: a.x, y: a.y });
     if (out.tipo === "arte") addItem(a, "arte", 1);
+    if (medium === "escrito" || medium === "tallado") {
+      sink.emit(makeEvent({ kind: "write", tick: s.tick, agentId: a.id, x: a.x, y: a.y, label: title, importance: medium === "escrito" ? 6 : 4, data: { textId, medium }, tags: ["texto", "escritura"] }));
+    }
     remember(s, a, "diario", `Hice ${out.tipo === "arte" ? "una obra" : `un ${out.tipo}`}: ${title}`, 5, ["creacion", out.tipo]);
     sink.emit(
       makeEvent({
@@ -450,5 +459,84 @@ export function applyCreate(a: Agent, s: EngineState, out: Creation, sink: Inten
   a.createdToday++;
   if (out.nota_diario) a.diaryPending.push(sanitizeInWorldText(out.nota_diario, 200));
   markStepDoneByVerb(a, "crear");
+  markStepDoneByVerb(a, "escribir");
   sink.emit(makeEvent({ kind: "intent", tick: s.tick, agentId: a.id, x: a.x, y: a.y, label: `crear ${out.tipo}`, importance: 1, data: { type: "create", output: out }, persist: true }));
+}
+
+/** Un líder decide por su gente. */
+export function applyGovern(leader: Agent, group: Group, s: EngineState, out: Govern, society: Society, sink: IntentSink): void {
+  const statement = sanitizeInWorldText(out.enunciado, 240);
+  const speech = sanitizeInWorldText(out.discurso, 700);
+  const members = membersAlive(s, group);
+  const listeners = members.filter((m) => m.id !== leader.id && Math.max(Math.abs(m.x - leader.x), Math.abs(m.y - leader.y)) <= 8);
+  switch (out.tipo) {
+    case "ley": {
+      const prohibits = out.regla?.prohibe ?? [];
+      const punishment = out.regla?.castigo ?? "nada";
+      const beliefId = seedNorm(s, leader, statement, listeners);
+      const law = society.addLaw(group, leader, statement, prohibits, punishment, beliefId);
+      sink.emit(makeEvent({ kind: "law", tick: s.tick, agentId: leader.id, x: leader.x, y: leader.y, label: statement, importance: 7, data: { enunciado: statement, lawId: law.id, groupId: group.id, prohibits, punishment }, tags: ["norma", "ley"] }));
+      break;
+    }
+    case "ritual": {
+      const r = out.ritual ?? { nombre: statement, cada_dias: 8, creencia: null };
+      const belief = r.creencia ? findSimilarBelief(s, r.creencia, 0.5) : null;
+      group.rituals.push({ name: sanitizeInWorldText(r.nombre, 60), everyDays: Math.max(2, Math.min(32, Math.round(r.cada_dias || 8))), beliefId: belief?.id ?? null, lastHeldDay: s.clock.day, declaredBy: leader.id });
+      group.norms.push(statement);
+      sink.emit(makeEvent({ kind: "ritual", tick: s.tick, agentId: leader.id, x: leader.x, y: leader.y, label: r.nombre, importance: 6, data: { groupId: group.id, beliefId: belief?.id ?? null, decree: true }, tags: ["rito", "fe"] }));
+      break;
+    }
+    case "guerra": {
+      const other = out.objetivo_grupo ? society.groupByName(out.objetivo_grupo) : null;
+      if (other && other.id !== group.id) society.declareWar(group, other, statement);
+      break;
+    }
+    case "paz":
+    case "tratado": {
+      const other = out.objetivo_grupo ? society.groupByName(out.objetivo_grupo) : null;
+      if (other && other.id !== group.id) society.makePeace(group, other, statement);
+      break;
+    }
+    case "tributo": {
+      group.norms.push(statement);
+      let collected = 0;
+      for (const m of listeners) {
+        if (inv(m, "comida") >= 2) {
+          takeItem(m, "comida", 1);
+          addItem(leader, "comida", 1);
+          adjustRelationship(m, leader.id, s.tick, { trust: -0.03, affinity: -0.05 });
+          collected++;
+        }
+      }
+      sink.emit(makeEvent({ kind: "law", tick: s.tick, agentId: leader.id, x: leader.x, y: leader.y, label: statement, importance: 6, data: { enunciado: statement, tributo: collected, groupId: group.id }, tags: ["tributo", "norma"] }));
+      break;
+    }
+    case "exilio": {
+      const target = members.find((m) => m.id !== leader.id && statement.toLowerCase().includes(m.name.toLowerCase())) ?? null;
+      if (target) {
+        group.members.delete(target.id);
+        target.groupId = null;
+        for (const m of members) {
+          const rel = m.relationships.get(target.id);
+          if (rel && m.id !== target.id) rel.label = "exiliado";
+        }
+        target.needs.seguridad = clamp01(target.needs.seguridad - 0.3);
+        target.needs.estima = clamp01(target.needs.estima - 0.3);
+        sink.emit(makeEvent({ kind: "punish", tick: s.tick, agentId: leader.id, targetId: target.id, x: leader.x, y: leader.y, label: "exilio", importance: 8, data: { groupId: group.id, enunciado: statement }, tags: ["castigo", "exilio"] }));
+      }
+      break;
+    }
+    case "nombramiento":
+    case "migracion":
+    default:
+      group.norms.push(statement);
+      break;
+  }
+  if (speech) {
+    sink.emit(makeEvent({ kind: "speech", tick: s.tick, agentId: leader.id, x: leader.x, y: leader.y, importance: 3, data: { texto: speech.slice(0, 200), discurso: true }, persist: true }));
+    for (const m of listeners) remember(s, m, "observacion", `${leader.name} nos habló: ${speech}`, 5, ["discurso", out.tipo], [leader.id]);
+    remember(s, leader, "diario", `Decidí por mi gente: ${statement}`, 6, ["gobierno", out.tipo]);
+    leader.needs.estima = clamp01(leader.needs.estima + 0.1);
+  }
+  sink.emit(makeEvent({ kind: "intent", tick: s.tick, agentId: leader.id, x: leader.x, y: leader.y, label: `gobernar: ${out.tipo}`, importance: 1, data: { type: "govern", output: out, groupId: group.id }, persist: true }));
 }

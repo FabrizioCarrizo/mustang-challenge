@@ -8,7 +8,7 @@ import { createGrid, idx } from "../world/grid.ts";
 import { recomputeResourceFields } from "../world/resources.ts";
 import type { Structure } from "../world/structures.ts";
 import { computeClock } from "./clock.ts";
-import type { Counters, DayStats, EngineState } from "./state.ts";
+import type { Counters, DayStats, EngineState, TextRecord } from "./state.ts";
 
 export const SNAPSHOT_VERSION = 1;
 
@@ -44,6 +44,9 @@ export interface SnapshotData {
     structureAt: string;
     owner: string;
     danger: string;
+    /** campos de distancia (derivados, pero se guardan para que el replay sea exacto) */
+    distWater?: string;
+    dist?: Record<ResourceKind, string>;
   };
   agents: SerializedAgent[];
   structures: SerializedStructure[];
@@ -57,6 +60,9 @@ export interface SnapshotData {
   milestones: Array<[string, number]>;
   lastFieldTick: number;
   beliefs: SerializedBelief[];
+  texts: TextRecord[];
+  /** estado de sistemas enganchados (sociedad, dios…) */
+  extra: Record<string, unknown>;
 }
 
 interface SerializedBelief extends Omit<Belief, "holders"> {
@@ -78,6 +84,14 @@ function fromB64Float32(s: string, n: number): Float32Array {
   const buf = Buffer.from(s, "base64");
   const out = new Float32Array(n);
   const view = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+  out.set(view.subarray(0, n));
+  return out;
+}
+
+function fromB64Uint16(s: string, n: number): Uint16Array {
+  const buf = Buffer.from(s, "base64");
+  const out = new Uint16Array(n);
+  const view = new Uint16Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
   out.set(view.subarray(0, n));
   return out;
 }
@@ -138,13 +152,15 @@ export function deserializeAgent(d: SerializedAgent): Agent {
   };
 }
 
-export function serializeState(s: EngineState): SnapshotData {
+export function serializeState(s: EngineState, extra: Record<string, unknown> = {}): SnapshotData {
   const g = s.grid;
   const resources = {} as Record<ResourceKind, string>;
   const resourceMax = {} as Record<ResourceKind, string>;
+  const dist = {} as Record<ResourceKind, string>;
   for (const r of RESOURCES) {
     resources[r] = b64(g.resources[r]);
     resourceMax[r] = b64(g.resourceMax[r]);
+    dist[r] = b64(g.dist[r]);
   }
   return {
     version: SNAPSHOT_VERSION,
@@ -164,6 +180,8 @@ export function serializeState(s: EngineState): SnapshotData {
       structureAt: b64(g.structureAt),
       owner: b64(g.owner),
       danger: b64(g.danger),
+      distWater: b64(g.distWater),
+      dist,
     },
     agents: [...s.agents.values()].map(serializeAgent),
     structures: [...s.structures.values()].map((st) => ({ ...st, contents: [...st.contents.entries()] })),
@@ -177,6 +195,8 @@ export function serializeState(s: EngineState): SnapshotData {
     milestones: [...s.milestones.entries()],
     lastFieldTick: s.lastFieldTick,
     beliefs: [...s.beliefs.values()].map((b) => ({ ...b, explains: b.explains.slice(), holders: [...b.holders.entries()] })),
+    texts: [...s.texts.values()].map((t) => ({ ...t, techIds: t.techIds.slice() })),
+    extra,
   };
 }
 
@@ -227,7 +247,9 @@ export function deserializeState(d: SnapshotData): EngineState {
     counters: { ...d.counters },
     rng,
     today: { ...d.today },
-    yesterday: d.yesterday ? { ...d.yesterday } : { births: 0, deaths: 0, violence: 0, trades: 0, gifts: 0, dialogues: 0, llmCalls: 0, usd: 0 },
+    yesterday: d.yesterday
+      ? { ...d.yesterday, consumed: (d.yesterday as Partial<DayStats>).consumed ?? {} }
+      : { births: 0, deaths: 0, violence: 0, trades: 0, gifts: 0, dialogues: 0, llmCalls: 0, usd: 0, consumed: {} },
     totals: { ...d.totals },
     lastFieldTick: d.lastFieldTick,
     shelterDirty: true,
@@ -236,7 +258,13 @@ export function deserializeState(d: SnapshotData): EngineState {
     milestones: new Map(d.milestones),
     pendingMemories: [],
     beliefs: new Map((d.beliefs ?? []).map((b) => [b.id, { ...b, explains: b.explains.slice(), holders: new Map(b.holders) }])),
+    texts: new Map((d.texts ?? []).map((t) => [t.id, { ...t, techIds: t.techIds.slice() }])),
   };
-  recomputeResourceFields(grid);
+  if (d.grid.distWater && d.grid.dist) {
+    grid.distWater = fromB64Uint16(d.grid.distWater, n);
+    for (const r of RESOURCES) grid.dist[r] = fromB64Uint16(d.grid.dist[r], n);
+  } else {
+    recomputeResourceFields(grid);
+  }
   return state;
 }

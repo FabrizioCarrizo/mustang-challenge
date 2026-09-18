@@ -27,10 +27,29 @@ export interface DayStats {
   dialogues: number;
   llmCalls: number;
   usd: number;
+  /** unidades consumidas por ítem (comer, quemar, construir, fabricar) */
+  consumed: Record<string, number>;
 }
 
 export function emptyDayStats(): DayStats {
-  return { births: 0, deaths: 0, violence: 0, trades: 0, gifts: 0, dialogues: 0, llmCalls: 0, usd: 0 };
+  return { births: 0, deaths: 0, violence: 0, trades: 0, gifts: 0, dialogues: 0, llmCalls: 0, usd: 0, consumed: {} };
+}
+
+export interface TextRecord {
+  id: number;
+  authorId: number | null;
+  tick: number;
+  title: string;
+  body: string;
+  /** oral: solo en la memoria de quien lo oyó; tallado: corto, en un lugar; escrito: persiste y se lee */
+  medium: "oral" | "tallado" | "escrito" | "objeto";
+  kind: string;
+  techIds: string[];
+  beliefId: number | null;
+  x: number;
+  y: number;
+  holderId: number | null;
+  reads: number;
 }
 
 export interface EngineState {
@@ -65,4 +84,6 @@ export interface EngineState {
   pendingMemories: Array<{ agentId: number; memory: Memory }>;
   /** creencias del mundo */
   beliefs: Map<number, Belief>;
+  /** textos y obras que existen en el mundo */
+  texts: Map<number, TextRecord>;
 }

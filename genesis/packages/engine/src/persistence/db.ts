@@ -172,6 +172,7 @@ export class WorldDb {
       this.driver.prepare("DELETE FROM texts WHERE tick > ?").run(tick);
       this.driver.prepare("DELETE FROM beliefs WHERE tick > ?").run(tick);
       this.driver.prepare("DELETE FROM chronicle WHERE tick_to > ?").run(tick);
+      this.driver.prepare("DELETE FROM groups_ WHERE founded_tick > ?").run(tick);
     });
   }
 
@@ -334,6 +335,24 @@ export class WorldDb {
       .prepare("SELECT tick, a_id, b_id, gave, got FROM trades WHERE tick >= ? ORDER BY tick ASC")
       .all(tick)
       .map((r) => ({ tick: Number(r.tick), a_id: Number(r.a_id), b_id: Number(r.b_id), gave: JSON.parse(String(r.gave)) as Record<string, number>, got: JSON.parse(String(r.got)) as Record<string, number> }));
+  }
+
+  upsertGroup(g: { id: number; name: string; foundedTick: number; dissolvedTick: number | null; leaderId: number | null; members: number[]; color: string; data: Record<string, unknown> }): void {
+    this.driver
+      .prepare(
+        `INSERT INTO groups_(id, name, founded_tick, dissolved_tick, leader_id, members, color, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, dissolved_tick = excluded.dissolved_tick, leader_id = excluded.leader_id, members = excluded.members, data = excluded.data`,
+      )
+      .run(g.id, g.name, g.foundedTick, g.dissolvedTick, g.leaderId, JSON.stringify(g.members), g.color, JSON.stringify(g.data));
+  }
+
+  upsertBelief(b: { id: number; founderId: number | null; tick: number; statement: string; kind: string; parentId: number | null; explains: string[]; active: boolean; data: Record<string, unknown> }): void {
+    this.driver
+      .prepare(
+        `INSERT INTO beliefs(id, founder_id, tick, statement, kind, parent_id, explains, active, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET explains = excluded.explains, active = excluded.active, data = excluded.data`,
+      )
+      .run(b.id, b.founderId, b.tick, b.statement, b.kind, b.parentId, JSON.stringify(b.explains), b.active ? 1 : 0, JSON.stringify(b.data));
   }
 
   llmCallsByType(): Array<{ callType: string; calls: number; usd: number }> {

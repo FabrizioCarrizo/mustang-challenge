@@ -1,13 +1,34 @@
-import type { ResourceKind } from "@genesis/protocol";
+import type { ItemKind, ResourceKind, StructureKind } from "@genesis/protocol";
 import { addItem, adjustRelationship, carryCapacity, inv, inventoryWeight, takeItem, type Agent, type CurrentAction } from "../../agents/agent.ts";
 import { clamp01 } from "../../agents/needs.ts";
 import type { GenesisConfig } from "../../config.ts";
 import type { Rng } from "../../rng.ts";
 import type { Clock } from "../../sim/clock.ts";
 import { makeEvent, type WorldEvent } from "../../sim/events.ts";
+import type { TextRecord } from "../../sim/state.ts";
+import type { Crime, Punishment } from "../../society/laws.ts";
+import { craftRecipeFor } from "../../society/tech.ts";
 import { NEIGHBORS8, NO_PATH, descend, idx, inBounds, isWalkable, moveCost, type WorldGrid } from "../../world/grid.ts";
 import { STRUCTURE_SPECS, createStructure, type Structure } from "../../world/structures.ts";
 import type { Candidate } from "./utility.ts";
+
+/** ¿Hay una estructura de este tipo (terminada; encendida si es fuego) a ≤ `radius` celdas? */
+export function nearStructure(a: Agent, ctx: { grid: WorldGrid; structures: Map<number, Structure> }, kind: StructureKind | "agua", radius = 2): boolean {
+  const { grid } = ctx;
+  if (kind === "agua") return grid.distWater[idx(grid.size, a.x, a.y)]! <= radius;
+  for (let dy = -radius; dy <= radius; dy++) {
+    for (let dx = -radius; dx <= radius; dx++) {
+      const nx = a.x + dx;
+      const ny = a.y + dy;
+      if (!inBounds(grid.size, nx, ny)) continue;
+      const sid = grid.structureAt[idx(grid.size, nx, ny)]!;
+      if (sid < 0) continue;
+      const st = ctx.structures.get(sid);
+      if (st && st.kind === kind && st.progress >= 1 && ((st.kind !== "fogata" && st.kind !== "horno") || st.lit)) return true;
+    }
+  }
+  return false;
+}
 
 export interface ActionContext {
   cfg: GenesisConfig;
@@ -23,6 +44,13 @@ export interface ActionContext {
   /** enseñar una técnica (lo resuelve el motor: eventos, hitos) */
   learn?: (a: Agent, tech: string, how: string) => void;
   onTrade?: (a: Agent, b: Agent, gave: Record<string, number>, got: Record<string, number>) => void;
+  /** contabilidad de consumo (economía) */
+  consume?: (item: ItemKind, n: number) => void;
+  /** memoria directa (para actos que no son eventos públicos) */
+  remember?: (a: Agent, text: string, importance: number, tags: string[]) => void;
+  texts?: Map<number, TextRecord>;
+  pendingCrimeFor?: (agentId: number) => Crime | null;
+  punish?: (crime: Crime, by: Agent) => { punishment: Punishment; victimId: number | null } | null;
 }
 
 export function startAction(a: Agent, c: Candidate, tick: number): CurrentAction {
@@ -99,23 +127,42 @@ export function executeAction(a: Agent, ctx: ActionContext, field: Uint16Array |
   switch (cur.verb) {
     case "beber": {
       const here = idx(grid.size, a.x, a.y);
-      if (grid.distWater[here] !== 0) return moveAlong(a, ctx, field ?? grid.distWater);
+      if (grid.distWater[here] !== 0) {
+        if (inv(a, "agua") >= 1) {
+          takeItem(a, "agua", 1);
+          a.needs.sed = clamp01(a.needs.sed + cfg.needs.drinkPerTick);
+          a.lastDrankTick = tick;
+          return true;
+        }
+        return moveAlong(a, ctx, field ?? grid.distWater);
+      }
       a.needs.sed = clamp01(a.needs.sed + cfg.needs.drinkPerTick);
       a.lastDrankTick = tick;
       cur.ticksLeft--;
       return cur.ticksLeft <= 0 || a.needs.sed >= 0.99;
     }
+    case "cargar_agua": {
+      if (inv(a, "cantaro") < 1) return true;
+      const here = idx(grid.size, a.x, a.y);
+      if (grid.distWater[here] !== 0) return moveAlong(a, ctx, field ?? grid.distWater);
+      const cap = 3 * Math.floor(inv(a, "cantaro"));
+      addItem(a, "agua", Math.max(0, cap - inv(a, "agua")));
+      markFirst(a, ctx, "cargar agua");
+      return true;
+    }
     case "comer": {
       const amount = Math.min(inv(a, "comida"), 1);
       if (amount <= 0) return true;
       takeItem(a, "comida", amount);
+      ctx.consume?.("comida", amount);
       a.needs.hambre = clamp01(a.needs.hambre + cfg.needs.foodPerUnit * amount);
       a.lastAteTick = tick;
       return true;
     }
     case "recolectar":
     case "juntar":
-    case "acopiar": {
+    case "acopiar":
+    case "cazar": {
       const res: ResourceKind = cur.resource ?? "comida";
       const here = idx(grid.size, a.x, a.y);
       const cell = grid.resources[res];
@@ -125,10 +172,13 @@ export function executeAction(a: Agent, ctx: ActionContext, field: Uint16Array |
         return moveAlong(a, ctx, f);
       }
       if (inventoryWeight(a) >= carryCapacity(a)) return true;
-      const amount = Math.min(cell[here]!, cfg.resources.gatherPerTick * (0.7 + 0.6 * a.genome.fuerza));
+      const toolBonus = inv(a, "herramienta") >= 1 ? 1.5 : 1;
+      const huntBonus = cur.verb === "cazar" && a.knows.has("caza") ? 1 + 0.5 * a.genome.fuerza + (inv(a, "arma") >= 1 ? 0.5 : 0) : 1;
+      const amount = Math.min(cell[here]!, cfg.resources.gatherPerTick * (0.7 + 0.6 * a.genome.fuerza) * toolBonus * huntBonus);
       cell[here] = cell[here]! - amount;
       ctx.resourceChanged(here);
       addItem(a, res, amount);
+      if (res === "comida" && ctx.rng.chance(0.12)) addItem(a, "semilla", 1);
       cur.ticksLeft--;
       markFirst(a, ctx, `recolectar ${res}`);
       return cur.ticksLeft <= 0 || cell[here]! < 0.1;
@@ -163,6 +213,7 @@ export function executeAction(a: Agent, ctx: ActionContext, field: Uint16Array |
         const s = ctx.structures.get(sid);
         if (s && s.kind === "fogata") {
           takeItem(a, "madera", 2);
+          ctx.consume?.("madera", 2);
           const wasLit = s.lit;
           s.lit = true;
           s.fuel += 2 * 36;
@@ -186,6 +237,7 @@ export function executeAction(a: Agent, ctx: ActionContext, field: Uint16Array |
       }
       if (site < 0) return true;
       takeItem(a, "madera", 2);
+      ctx.consume?.("madera", 2);
       const sx = site % grid.size;
       const sy = (site - sx) / grid.size;
       const s = createStructure(ctx.nextStructureId(), "fogata", sx, sy, a.id, tick);
@@ -241,13 +293,18 @@ export function executeAction(a: Agent, ctx: ActionContext, field: Uint16Array |
         for (const [item, n] of Object.entries(spec.materials)) {
           if (inv(a, item as never) < (n ?? 0)) return true;
         }
-        for (const [item, n] of Object.entries(spec.materials)) takeItem(a, item as never, n ?? 0);
+        for (const [item, n] of Object.entries(spec.materials)) {
+          takeItem(a, item as never, n ?? 0);
+          ctx.consume?.(item as ItemKind, n ?? 0);
+        }
         s = createStructure(ctx.nextStructureId(), kind, cur.targetX, cur.targetY, a.id, tick);
+        s.groupId = a.groupId;
         ctx.structures.set(s.id, s);
         grid.structureAt[site] = s.id;
       }
       a.buildingId = s.id;
-      s.progress = Math.min(1, s.progress + (0.6 + 0.8 * a.genome.fuerza) / spec.work);
+      const toolBonus = inv(a, "herramienta") >= 1 ? 1.5 : 1;
+      s.progress = Math.min(1, s.progress + ((0.6 + 0.8 * a.genome.fuerza) * toolBonus) / spec.work);
       s.lastChangeTick = tick;
       cur.progress = s.progress;
       if (s.progress >= 1) {
@@ -375,6 +432,184 @@ export function executeAction(a: Agent, ctx: ActionContext, field: Uint16Array |
       if (field) return moveAlong(a, ctx, field);
       if (cur.targetX === null || cur.targetY === null) return true;
       return moveToward(a, ctx, cur.targetX, cur.targetY);
+    }
+    case "atacar": {
+      const other = adjacentTarget(a, ctx, cur);
+      if (other === "moving") return false;
+      if (!other) return true;
+      const weapon = inv(a, "arma") >= 1 ? 2 : 1;
+      const armor = inv(other, "ropa") >= 1 ? 0.8 : 1;
+      const damage = (0.12 + 0.18 * a.genome.fuerza) * weapon * armor;
+      other.health -= damage;
+      other.injuries += damage;
+      other.needs.seguridad = clamp01(other.needs.seguridad - 0.3);
+      other.lastAttackedBy = a.id;
+      other.lastAttackedTick = tick;
+      other.asleep = false;
+      if (other.health <= 0) other.causeOfDeath = `violencia (${a.name})`;
+      const here = idx(grid.size, a.x, a.y);
+      grid.danger[here] = 1;
+      grid.danger[idx(grid.size, other.x, other.y)] = 1;
+      adjustRelationship(other, a.id, tick, { trust: -0.3, affinity: -0.3 });
+      adjustRelationship(a, other.id, tick, { affinity: -0.1 });
+      a.needs.estima = clamp01(a.needs.estima + 0.05 * a.genome.agresion);
+      a.lastAttackedBy = null;
+      ctx.events.push(
+        makeEvent({ kind: "attack", tick, agentId: a.id, targetId: other.id, x: a.x, y: a.y, label: cur.reason, importance: 7, data: { damage: Math.round(damage * 100) / 100, weapon: weapon > 1 }, tags: ["violencia", "ataque"] }),
+      );
+      markFirst(a, ctx, "atacar");
+      return true;
+    }
+    case "robar": {
+      const other = adjacentTarget(a, ctx, cur);
+      if (other === "moving") return false;
+      if (!other) return true;
+      const candidates: ItemKind[] = ["comida", "madera", "piedra", "gema", "herramienta"];
+      const item = candidates.find((it) => inv(other, it) >= (it === "gema" || it === "herramienta" ? 1 : 2)) ?? null;
+      if (!item) return true;
+      const n = Math.min(inv(other, item), item === "comida" || item === "madera" ? 1 + (a.genome.fuerza > 0.6 ? 1 : 0) : 1);
+      takeItem(other, item, n);
+      addItem(a, item, n);
+      const detected = ctx.rng.chance(other.asleep ? 0.15 : 0.55);
+      ctx.remember?.(a, `Le robé ${n} de ${item} a ${other.name}${detected ? " y me vieron" : " sin que nadie lo notara"}`, detected ? 6 : 4, ["robo"]);
+      if (detected) {
+        adjustRelationship(other, a.id, tick, { trust: -0.3, affinity: -0.2 });
+        ctx.events.push(makeEvent({ kind: "theft", tick, agentId: a.id, targetId: other.id, x: a.x, y: a.y, label: `${n} de ${item}`, importance: 6, data: { item, cantidad: n }, tags: ["robo", "injusticia"] }));
+      }
+      markFirst(a, ctx, "robar");
+      return true;
+    }
+    case "castigar": {
+      const crime = ctx.pendingCrimeFor?.(a.id) ?? null;
+      if (!crime) return true;
+      cur.targetId = crime.criminalId;
+      const criminal = adjacentTarget(a, ctx, cur);
+      if (criminal === "moving") return false;
+      if (!criminal) return true;
+      const result = ctx.punish?.(crime, a) ?? null;
+      if (!result) return true;
+      const victim = result.victimId !== null ? ctx.agents.get(result.victimId) : undefined;
+      switch (result.punishment) {
+        case "multa": {
+          let taken = 0;
+          for (const it of ["comida", "madera", "piedra"] as const) {
+            const q = Math.min(inv(criminal, it), 2 - taken);
+            if (q > 0) {
+              takeItem(criminal, it, q);
+              addItem(victim && victim.diedTick === null ? victim : a, it, q);
+              taken += q;
+            }
+            if (taken >= 2) break;
+          }
+          break;
+        }
+        case "golpe":
+          criminal.health -= 0.15;
+          criminal.injuries += 0.15;
+          criminal.needs.seguridad = clamp01(criminal.needs.seguridad - 0.2);
+          break;
+        default:
+          break;
+      }
+      adjustRelationship(criminal, a.id, tick, { affinity: -0.3 });
+      a.needs.estima = clamp01(a.needs.estima + 0.1);
+      ctx.events.push(
+        makeEvent({ kind: "punish", tick, agentId: a.id, targetId: criminal.id, x: a.x, y: a.y, label: result.punishment, importance: 6, data: { crimeId: crime.id, lawId: crime.lawId }, tags: ["castigo", "norma"] }),
+      );
+      markFirst(a, ctx, "castigar");
+      return true;
+    }
+    case "reclamar": {
+      let claimed = 0;
+      const cells = [idx(grid.size, a.x, a.y)];
+      for (const [dx, dy] of NEIGHBORS8) if (inBounds(grid.size, a.x + dx, a.y + dy)) cells.push(idx(grid.size, a.x + dx, a.y + dy));
+      for (const c of cells) {
+        if (grid.owner[c] === -1) {
+          grid.owner[c] = a.id;
+          claimed++;
+        }
+      }
+      if (claimed > 0) ctx.events.push(makeEvent({ kind: "claim", tick, agentId: a.id, x: a.x, y: a.y, label: `${claimed} celdas`, importance: 3, tags: ["propiedad"] }));
+      markFirst(a, ctx, "reclamar");
+      return true;
+    }
+    case "fabricar": {
+      const recipe = cur.item ? craftRecipeFor(cur.item) : null;
+      if (!recipe || !a.knows.has(recipe.tech)) return true;
+      for (const [it, n] of Object.entries(recipe.ingredients)) if (inv(a, it as ItemKind) < (n ?? 0)) return true;
+      if (recipe.near && !nearStructure(a, ctx, recipe.near)) return true;
+      cur.ticksLeft--;
+      if (cur.ticksLeft > 0) return false;
+      for (const [it, n] of Object.entries(recipe.ingredients)) {
+        takeItem(a, it as ItemKind, n ?? 0);
+        ctx.consume?.(it as ItemKind, n ?? 0);
+      }
+      addItem(a, recipe.item, 1);
+      a.needs.estima = clamp01(a.needs.estima + 0.08);
+      ctx.events.push(makeEvent({ kind: "craft", tick, agentId: a.id, x: a.x, y: a.y, label: recipe.item, importance: 4, data: { item: recipe.item }, tags: ["fabricar", recipe.item] }));
+      markFirst(a, ctx, `fabricar ${recipe.item}`);
+      return true;
+    }
+    case "cuidar": {
+      // la granja más cercana propia o de la tribu
+      let farm: Structure | null = null;
+      let best = 999;
+      for (const st of ctx.structures.values()) {
+        if (st.kind !== "granja" || st.progress < 1) continue;
+        if (st.ownerId !== a.id && (st.groupId === null || st.groupId !== a.groupId)) continue;
+        const d = Math.max(Math.abs(st.x - a.x), Math.abs(st.y - a.y));
+        if (d < best) {
+          best = d;
+          farm = st;
+        }
+      }
+      if (!farm || best > 25) return true;
+      if (best > 1) {
+        moveToward(a, ctx, farm.x, farm.y);
+        return false;
+      }
+      farm.growth = Math.min(1, farm.growth + 0.02 * (0.7 + 0.6 * a.genome.fuerza));
+      cur.ticksLeft--;
+      if (farm.growth >= 1) {
+        farm.growth = 0;
+        const yieldFood = 6 + Math.round(4 * a.genome.inteligencia);
+        addItem(a, "comida", yieldFood);
+        addItem(a, "semilla", 2);
+        ctx.events.push(makeEvent({ kind: "harvest", tick, agentId: a.id, x: farm.x, y: farm.y, label: `${yieldFood} de comida`, importance: 4, data: { structureId: farm.id, comida: yieldFood }, tags: ["cosecha", "agricultura"] }));
+        markFirst(a, ctx, "cosechar");
+        return true;
+      }
+      return cur.ticksLeft <= 0;
+    }
+    case "leer": {
+      const texts = ctx.texts;
+      if (!texts) return true;
+      let found: TextRecord | null = null;
+      for (const t of texts.values()) {
+        if (t.medium === "objeto") continue;
+        const holder = t.holderId !== null ? ctx.agents.get(t.holderId) : undefined;
+        const nearPlace = Math.max(Math.abs(t.x - a.x), Math.abs(t.y - a.y)) <= 1;
+        const nearHolder = holder && holder.diedTick === null && Math.max(Math.abs(holder.x - a.x), Math.abs(holder.y - a.y)) <= 1 && holder.id !== a.id;
+        if (t.medium === "oral" ? nearHolder : nearPlace || nearHolder) {
+          if (a.firsts.has(`leyo:${t.id}`)) continue;
+          found = t;
+          break;
+        }
+      }
+      if (!found) return true;
+      cur.ticksLeft--;
+      if (cur.ticksLeft > 0) return false;
+      a.firsts.add(`leyo:${found.id}`);
+      if (found.medium === "escrito" && !a.knows.has("escritura")) {
+        ctx.remember?.(a, `Vi marcas en ${found.title === "" ? "una tablilla" : `"${found.title}"`} pero no sé leerlas`, 3, ["texto"]);
+        return true;
+      }
+      found.reads++;
+      ctx.remember?.(a, `${found.medium === "oral" ? "Escuché" : "Leí"} "${found.title}": ${found.body.slice(0, 220)}`, 5, ["texto", found.kind]);
+      for (const t of found.techIds) if (!a.knows.has(t)) ctx.learn?.(a, t, `leyendo "${found.title}"`);
+      a.needs.sentido = clamp01(a.needs.sentido + 0.05);
+      ctx.events.push(makeEvent({ kind: "read", tick, agentId: a.id, targetId: found.authorId, x: a.x, y: a.y, label: found.title, importance: 4, data: { textId: found.id, medium: found.medium }, tags: ["texto"] }));
+      return true;
     }
     default:
       return true;

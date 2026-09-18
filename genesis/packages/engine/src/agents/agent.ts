@@ -132,6 +132,8 @@ export interface Agent {
   reflectedThisSleep: boolean;
   /** número de pedidos System 2 en cola o en vuelo para este ser */
   pendingThoughts: number;
+  lastAttackedBy: number | null;
+  lastAttackedTick: number;
 }
 
 export function createAgent(
@@ -207,6 +209,8 @@ export function createAgent(
     createdToday: 0,
     reflectedThisSleep: false,
     pendingThoughts: 0,
+    lastAttackedBy: null,
+    lastAttackedTick: -1000,
   };
 }
 

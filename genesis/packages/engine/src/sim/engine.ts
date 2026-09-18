@@ -1,5 +1,6 @@
 import { RESOURCES, type ResourceKind } from "@genesis/protocol";
-import { createAgent, inv, resetDailyCounters, type Agent } from "../agents/agent.ts";
+import { createAgent, inv, remember, resetDailyCounters, type Agent } from "../agents/agent.ts";
+import type { Crime, Punishment } from "../society/laws.ts";
 import { clamp01 } from "../agents/needs.ts";
 import { executeAction, startAction, type ActionContext } from "../cognition/system1/actions.ts";
 import { decide, type DecisionContext, type Perception } from "../cognition/system1/utility.ts";
@@ -21,6 +22,19 @@ import { deserializeState, serializeState, type SnapshotData } from "./snapshot.
 import { SpatialHash } from "./spatial.ts";
 import { emptyDayStats, type EngineState } from "./state.ts";
 import type { MetricsPoint } from "@genesis/protocol";
+
+/** De noche solo se siguen los pasos vitales del plan. */
+function planCandidateUrgent(a: Agent): boolean {
+  const step = a.plan.find((p) => !p.done);
+  return !!step && step.prioridad >= 5;
+}
+
+/** Lo mínimo que el motor necesita de la sociedad (evita la dependencia circular). */
+export interface SocietyLike {
+  crimes: Crime[];
+  pendingCrimeFor(agentId: number): Crime | null;
+  punish(crime: Crime, by: Agent): { punishment: Punishment; victimId: number | null } | null;
+}
 
 export interface TickOutput {
   tick: number;
@@ -53,6 +67,8 @@ export class Engine {
   private removedStructures: number[] = [];
   readonly names: NameResolver;
   hooks: EngineHooks = {};
+  /** sociedad enganchada (detectores, leyes, crímenes) */
+  society: SocietyLike | null = null;
 
   constructor(state: EngineState) {
     this.s = state;
@@ -96,6 +112,7 @@ export class Engine {
       milestones: new Map(),
       pendingMemories: [],
       beliefs: new Map(),
+      texts: new Map(),
     };
     const engine = new Engine(state);
     engine.populate(config.world.initialPopulation);
@@ -104,12 +121,29 @@ export class Engine {
     return engine;
   }
 
+  /** sistemas enganchados que guardan estado propio en el snapshot */
+  readonly extraSerializers = new Map<string, { serialize(): unknown; restore(data: unknown): void }>();
+  private pendingExtra: Record<string, unknown> = {};
+
   static fromSnapshot(d: SnapshotData): Engine {
-    return new Engine(deserializeState(d));
+    const e = new Engine(deserializeState(d));
+    e.pendingExtra = d.extra ?? {};
+    return e;
+  }
+
+  /** Registra un sistema con estado propio; si el snapshot traía datos para él, los restaura. */
+  attachSystem(name: string, sys: { serialize(): unknown; restore(data: unknown): void }): void {
+    this.extraSerializers.set(name, sys);
+    if (name in this.pendingExtra) {
+      sys.restore(this.pendingExtra[name]);
+      delete this.pendingExtra[name];
+    }
   }
 
   snapshot(): SnapshotData {
-    return serializeState(this.s);
+    const extra: Record<string, unknown> = { ...this.pendingExtra };
+    for (const [name, sys] of this.extraSerializers) extra[name] = sys.serialize();
+    return serializeState(this.s, extra);
   }
 
   hash(): string {
@@ -286,6 +320,7 @@ export class Engine {
       s.lastFieldTick = s.tick;
       const danger = s.grid.danger;
       for (let i = 0; i < danger.length; i++) if (danger[i]! > 0) danger[i] = danger[i]! * 0.9;
+      this.growFarms();
     }
     this.burnFires();
     if (s.shelterDirty) this.recomputeShelter();
@@ -317,6 +352,15 @@ export class Engine {
         s.today.trades++;
         s.totals.trades++;
       },
+      consume: (item, n) => {
+        s.today.consumed[item] = (s.today.consumed[item] ?? 0) + n;
+      },
+      remember: (ag, text, importance, tags) => {
+        remember(s, ag, "observacion", text, importance, tags);
+      },
+      texts: s.texts,
+      pendingCrimeFor: (id) => this.society?.pendingCrimeFor(id) ?? null,
+      punish: (crime, by) => this.society?.punish(crime, by) ?? null,
     };
     const shelterExists = s.structures.size > 0;
     const scratch: number[] = [];
@@ -348,7 +392,8 @@ export class Engine {
         rng: s.rng.get("s1"),
         perception: p,
         shelterExists,
-        planCandidate: a.plan.length ? planCandidate(a, s) : null,
+        planCandidate: a.plan.length && (clock.isDay || (planCandidateUrgent(a))) ? planCandidate(a, s) : null,
+        pendingCrime: this.society && a.groupId !== null && this.society.crimes.length > 0 ? this.society.pendingCrimeFor(a.id) : null,
       };
       const c = decide(a, dctx);
       const cur = a.current;
@@ -563,10 +608,21 @@ export class Engine {
     if (damage > 0) a.health -= damage;
     else if (a.health < 1 && needs.sed > 0.3 && needs.hambre > 0.3 && needs.calor > 0.3) {
       a.health = Math.min(1, a.health + cfg.needs.healPerHour / tph);
+      if (a.injuries > 0) a.injuries = Math.max(0, a.injuries - cfg.needs.healPerHour / tph);
     }
     if (a.health <= 0) {
-      a.causeOfDeath = cause ?? (a.disease > 0 ? "enfermedad" : "heridas");
+      if (!a.causeOfDeath) a.causeOfDeath = cause ?? (a.disease > 0 ? "enfermedad" : "heridas");
       deaths.push(a.id);
+    }
+  }
+
+  /** Las granjas crecen solas, despacio, salvo en invierno. */
+  private growFarms(): void {
+    const s = this.s;
+    if (s.clock.season === "invierno") return;
+    const rate = 0.002 * s.config.resources.seasonFactor[s.clock.season] * (s.climate.drought ? 0.3 : 1);
+    for (const st of s.structures.values()) {
+      if (st.kind === "granja" && st.progress >= 1 && st.growth < 1) st.growth = Math.min(1, st.growth + rate);
     }
   }
 
@@ -598,10 +654,12 @@ export class Engine {
   private shouldWake(a: Agent, p: Perception): boolean {
     const n = a.needs;
     const c = this.s.clock;
-    if (n.descanso >= 0.98) return true;
-    if (c.isDay && c.hour >= this.s.config.time.dawnHour && n.descanso > 0.6) return true;
+    // de noche se duerme de corrido, salvo emergencia
     if (n.sed < 0.12 || n.hambre < 0.12 || n.calor < 0.1) return true;
     if (p.danger > 0.5) return true;
+    if (!c.isDay) return false;
+    if (n.descanso >= 0.98) return true;
+    if (c.hour >= this.s.config.time.dawnHour && n.descanso > 0.6) return true;
     return false;
   }
 

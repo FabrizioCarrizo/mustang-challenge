@@ -78,6 +78,17 @@ function daySummary(day: number, out: TickOutput, runner: Runner): string {
   const needs = m ? `sed ${m.avgNeeds.sed.toFixed(2)} ham ${m.avgNeeds.hambre.toFixed(2)} cal ${m.avgNeeds.calor.toFixed(2)} soc ${m.avgNeeds.social.toFixed(2)} sen ${m.avgNeeds.sentido.toFixed(2)}` : "";
   const d = out.newDay ? s.yesterday : s.today;
   const brain = runner.brain ? ` · llamadas ${d.llmCalls} (US$${d.usd.toFixed(3)}) charlas ${d.dialogues} creencias ${s.beliefs.size}` : "";
+  const groups = runner.society.groupsInfo();
+  const society = ` · tribus ${groups.length}${groups.some((g) => g.leaderId !== null) ? " (con líder)" : ""} · leyes ${runner.society.lawsInfo().filter((l) => l.active).length}`;
+  return `día ${String(day).padStart(4)} · ${formatClock(s.clock).padEnd(34)} · ${s.climate.weather.padEnd(9)} ${s.climate.temperature.toFixed(1).padStart(5)}° · pob ${String(s.alive.length).padStart(3)} · nac ${d.births} · muertes ${d.deaths} · estr ${s.structures.size} · ${needs}${brain}${society}`;
+}
+
+function unusedDaySummary(day: number, out: TickOutput, runner: Runner): string {
+  const s = runner.engine.s;
+  const m = out.metrics;
+  const needs = m ? "" : "";
+  const d = out.newDay ? s.yesterday : s.today;
+  const brain = "";
   return `día ${String(day).padStart(4)} · ${formatClock(s.clock).padEnd(34)} · ${s.climate.weather.padEnd(9)} ${s.climate.temperature.toFixed(1).padStart(5)}° · pob ${String(s.alive.length).padStart(3)} · nac ${d.births} · muertes ${d.deaths} · estr ${s.structures.size} · ${needs}${brain}`;
 }
 

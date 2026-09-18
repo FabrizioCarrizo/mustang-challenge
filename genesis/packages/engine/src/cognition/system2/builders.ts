@@ -149,13 +149,50 @@ export function buildReaction(a: Agent, event: WorldEvent, ctx: BuildContext): B
   return { system: blocks, user: parts.join("\n\n"), meta: { mock, summary: text }, promptHash: hash };
 }
 
-export function buildCreate(a: Agent, ctx: BuildContext): BuiltPrompt {
+export function buildCreate(a: Agent, ctx: BuildContext, hint: string | null = null): BuiltPrompt {
   const s = ctx.s;
   const near = nearbyIds(a, ctx, s.config.social.perceptionRadius);
   const sit = buildSituation(a, s, ctx.retriever, "arte canto relato sentido invento fuego herramienta", s.config.brain.retrievalK, near);
-  const parts = [joinSituation(sit), "# LA LLAMADA\nTenés un rato libre y algo por dentro. Creá como indica la guía."];
+  const ask =
+    hint === "texto"
+      ? `# LA LLAMADA\nQuerés dejar algo escrito${a.knows.has("escritura") ? " en una tablilla" : ", aunque solo sepas tallar marcas"}: una receta, una ley, un mito, un aviso. Creá un texto como indica la guía (tipo texto).`
+      : "# LA LLAMADA\nTenés un rato libre y algo por dentro. Creá como indica la guía.";
+  const parts = [joinSituation(sit), ask];
   const { blocks, hash } = systemBlocks("create", a, ctx, false);
-  return { system: blocks, user: parts.join("\n\n"), meta: { mock: mockContext(a, ctx, near), summary: "crear" }, promptHash: hash };
+  return { system: blocks, user: parts.join("\n\n"), meta: { mock: mockContext(a, ctx, near), summary: hint ?? "crear" }, promptHash: hash };
+}
+
+export interface GovernContext {
+  groupName: string;
+  members: number;
+  leaderSinceDays: number;
+  norms: string[];
+  rituals: string[];
+  wars: string[];
+  treaties: string[];
+  recentCrimes: string[];
+  issue: string;
+  otherGroups: string[];
+}
+
+export function buildGovern(leader: Agent, gctx: GovernContext, ctx: BuildContext): BuiltPrompt {
+  const s = ctx.s;
+  const near = nearbyIds(leader, ctx, s.config.social.perceptionRadius);
+  const sit = buildSituation(leader, s, ctx.retriever, `${gctx.issue} tribu ley norma crimen`, s.config.brain.retrievalK, near);
+  const lines = [
+    joinSituation(sit),
+    `# TU GENTE\nLa tribu ${gctx.groupName}: ${gctx.members} seres. Te siguen desde hace ${gctx.leaderSinceDays} días.`,
+    gctx.norms.length ? `Normas y decisiones vigentes:\n${gctx.norms.map((n) => `- <texto_ajeno>${sanitizeInWorldText(n, 160)}</texto_ajeno>`).join("\n")}` : "Todavía no hay normas ni ritos declarados.",
+    gctx.rituals.length ? `Ritos: ${gctx.rituals.join("; ")}.` : "",
+    gctx.wars.length ? `En guerra con: ${gctx.wars.join(", ")}.` : "",
+    gctx.treaties.length ? `En paz con: ${gctx.treaties.join(", ")}.` : "",
+    gctx.otherGroups.length ? `Otras tribus conocidas: ${gctx.otherGroups.join(", ")}.` : "No se conocen otras tribus.",
+    gctx.recentCrimes.length ? `Crímenes recientes entre los tuyos:\n${gctx.recentCrimes.map((c) => `- ${sanitizeInWorldText(c, 160)}`).join("\n")}` : "",
+    `# EL ASUNTO\n${sanitizeInWorldText(gctx.issue, 300)}`,
+    "# LA LLAMADA\nDecidí y anunciá como indica la guía.",
+  ].filter(Boolean);
+  const { blocks, hash } = systemBlocks("govern", leader, ctx, false);
+  return { system: blocks, user: lines.join("\n\n"), meta: { mock: mockContext(leader, ctx, near, { groupName: gctx.groupName }), summary: gctx.issue }, promptHash: hash };
 }
 
 export function buildHeritage(child: Agent, parents: Agent[], ctx: BuildContext, groupNorms: string[]): BuiltPrompt {
