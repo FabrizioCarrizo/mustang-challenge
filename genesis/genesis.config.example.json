@@ -1,0 +1,42 @@
+{
+  "world": { "name": "eden", "size": 128, "initialPopulation": 40, "abundance": 1, "seaLevel": 0.36, "mountainLevel": 0.8, "forestMoisture": 0.55 },
+  "time": { "minutesPerTick": 10, "ticksPerDay": 144, "daysPerSeason": 8, "seasonsPerYear": 4, "dawnHour": 6, "duskHour": 20 },
+  "life": {
+    "adultAgeYears": 1.5,
+    "fertileFromYears": 1.5,
+    "fertileToYears": 6,
+    "elderAgeYears": 8,
+    "maxAgeYears": 11,
+    "gestationDays": 6,
+    "childhoodMinAgeYearsForPlans": 0.5,
+    "baseFertilityPerDay": 0.08,
+    "diseaseChancePerDay": 0.004
+  },
+  "needs": {
+    "decay": { "sed": 0.0035, "hambre": 0.0023, "calor": 0.01, "descanso": 0.0104, "seguridad": 0, "social": 0.0023, "estima": 0.001, "sentido": 0.0005 },
+    "damagePerHour": { "sed": 0.02, "hambre": 0.01, "calor": 0.015 }
+  },
+  "resources": {
+    "maxPerCell": { "comida": 6, "madera": 10, "piedra": 12, "mineral": 6, "gema": 2 },
+    "seasonFactor": { "primavera": 1.4, "verano": 1.0, "otoño": 0.6, "invierno": 0.1 }
+  },
+  "climate": { "baseTemperature": 16, "seasonalAmplitude": 13, "stormChancePerDay": 0.03, "droughtChancePerSeason": 0.12 },
+  "social": { "perceptionRadius": 6, "dialogueScoreThreshold": 0.6, "maxDialoguesPerAgentPerDay": 3 },
+  "brain": {
+    "mode": "claude",
+    "language": "es",
+    "dialogueMode": "director",
+    "routine": { "provider": "anthropic", "model": "claude-haiku-4-5", "effort": null, "maxTokens": 1200 },
+    "epochal": { "provider": "anthropic", "model": "claude-fable-5-1", "effort": "medium", "maxTokens": 3000 },
+    "ollama": { "host": "http://127.0.0.1:11434", "model": "qwen3:14b" },
+    "concurrency": 8,
+    "retrievalK": 15,
+    "caloriesPerCall": 0.02,
+    "maxCallsPerAgentPerDay": 8,
+    "reflectionImportanceThreshold": 150,
+    "historianEveryDays": 7
+  },
+  "budget": { "usdPerSimDay": 2, "usdPerRealHour": 1, "usdTotal": 50 },
+  "pacing": { "preset": "cronica", "simDayRealSeconds": 600, "multiplier": 1, "maxPendingPlans": 40 },
+  "persistence": { "snapshotEveryTicks": 144, "retentionDays": 90, "memoryFoldDays": 14, "memoryFoldImportance": 4 }
+}

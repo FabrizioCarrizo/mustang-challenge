@@ -19,9 +19,11 @@ Comandos:
   serve     corre el mundo con dashboard  --name eden [--port 7777] [--brain ...] [--preset cronica] [--paused]
   inspect   muestra un ser                --name eden --agent 3
   doctor    verifica el entorno
-  replay    reproduce la historia grabada --name eden [--to tick] [--verify]        (fase 5)
-  brain:check  prueba el cerebro LLM      [--model ...]                            (fase 2)
-  cost      resume el gasto en tokens     --name eden                              (fase 2)
+  replay    reproduce la historia grabada --name eden [--from tick] [--to tick] [--verify]
+  fork      bifurca un mundo en un tick   --name eden --at tick --as eden-rama
+  prune     poda memorias y eventos       --name eden
+  brain:check  prueba el cerebro LLM      [--model ...] [--epochal]
+  cost      resume el gasto en tokens     --name eden
 
 Variables: GENESIS_WORLDS (carpeta de mundos, por defecto ./worlds), GENESIS_PORT, GENESIS_BRAIN, GENESIS_WORLD
 `;
@@ -42,7 +44,11 @@ const { values, positionals } = parseArgs({
     speed: { type: "string" },
     paused: { type: "boolean" },
     agent: { type: "string" },
+    from: { type: "string" },
     to: { type: "string" },
+    at: { type: "string" },
+    as: { type: "string" },
+    epochal: { type: "boolean" },
     verify: { type: "boolean" },
     model: { type: "string" },
     worlds: { type: "string" },

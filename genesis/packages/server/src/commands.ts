@@ -1,4 +1,4 @@
-import { AnthropicBrain, Engine, GUIDES, MAX_TOKENS, SCHEMAS, buildDailyPlan, buildWorldLaws, estimateTokens, openWorld, worldExists, Bm25Retriever, loadConfig } from "@genesis/engine";
+import { AnthropicBrain, Engine, GUIDES, MAX_TOKENS, SCHEMAS, buildDailyPlan, buildWorldLaws, estimateTokens, openWorld, worldExists, Bm25Retriever, loadConfig, replayWorld, forkWorld, pruneWorld, WorldDb, worldPaths } from "@genesis/engine";
 
 export interface CommandContext {
   values: Record<string, string | boolean | undefined>;
@@ -76,6 +76,53 @@ export const commands: Record<string, (ctx: CommandContext) => Promise<void>> = 
       });
       console.log(`Épica: ${res.status} en ${res.latencyMs} ms · modelo servido ${res.model} · US$${res.usd.toFixed(5)}${res.error ? ` · ${res.error}` : ""}`);
     }
+  },
+
+  replay: async (ctx) => {
+    if (!worldExists(ctx.worldsDir, ctx.worldName)) throw new Error(`No existe el mundo "${ctx.worldName}"`);
+    const db = WorldDb.open(worldPaths(ctx.worldsDir, ctx.worldName).db);
+    const last = Number(db.getMeta("last_tick") ?? 0);
+    const from = ctx.values.from !== undefined ? Number(ctx.values.from) : 0;
+    const to = ctx.values.to !== undefined ? Number(ctx.values.to) : last;
+    console.log(`Reproduciendo "${ctx.worldName}" desde el snapshot anterior al tick ${from} hasta el tick ${to}...`);
+    let ok = 0;
+    let bad = 0;
+    let unknown = 0;
+    const result = await replayWorld(db, from, to, {
+      onDay: (step) => {
+        if (step.match === true) ok++;
+        else if (step.match === false) bad++;
+        else unknown++;
+        if (ctx.values.verify) console.log(`  tick ${step.tick}: ${step.match === null ? "sin huella grabada" : step.match ? "coincide ✔" : `DIFIERE ✘ (${step.recordedHash} vs ${step.hash})`}`);
+      },
+    });
+    console.log(`Listo: tick ${result.engine.s.tick}, población ${result.engine.s.alive.length}. Decisiones grabadas reusadas: ${result.intentHits}; sin grabación: ${result.intentMisses}; actos de dios: ${result.godActions}.`);
+    console.log(`Huellas diarias: ${ok} coinciden, ${bad} difieren, ${unknown} sin registro.`);
+    if (bad > 0) console.log("Las diferencias son esperables cuando el cerebro era un modelo real: las decisiones se reaplican en el tick más cercano, no en el exacto.");
+    db.close();
+  },
+
+  fork: async (ctx) => {
+    if (!worldExists(ctx.worldsDir, ctx.worldName)) throw new Error(`No existe el mundo "${ctx.worldName}"`);
+    const as = String(ctx.values.as ?? `${ctx.worldName}-rama`);
+    const db = WorldDb.open(worldPaths(ctx.worldsDir, ctx.worldName).db);
+    const at = ctx.values.at !== undefined ? Number(ctx.values.at) : Number(db.getMeta("last_tick") ?? 0);
+    const r = forkWorld(db, ctx.worldsDir, as, at);
+    db.close();
+    console.log(`Mundo "${r.name}" bifurcado desde "${ctx.worldName}" en el tick ${r.tick}: ${r.dir}`);
+    console.log(`Corré: genesis serve --name ${r.name}`);
+  },
+
+  prune: async (ctx) => {
+    if (!worldExists(ctx.worldsDir, ctx.worldName)) throw new Error(`No existe el mundo "${ctx.worldName}"`);
+    const w = openWorld(ctx.worldsDir, ctx.worldName);
+    const before = w.db.sizes();
+    const report = pruneWorld(w.db, w.engine.config, w.engine.s.tick);
+    const after = w.db.sizes();
+    console.log(`Poda de "${ctx.worldName}": ${report.memoriesDeleted} memorias plegadas en ${report.memoriesFolded} resúmenes, ${report.eventsDeleted} eventos borrados, ${report.llmBodiesTrimmed} cuerpos de llamadas recortados.`);
+    console.log(`Filas antes: ${JSON.stringify(before)}`);
+    console.log(`Filas después: ${JSON.stringify(after)}`);
+    w.db.close();
   },
 
   cost: async (ctx) => {

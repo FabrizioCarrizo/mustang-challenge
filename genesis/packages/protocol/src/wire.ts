@@ -332,6 +332,8 @@ export interface SnapshotMessage {
   budget: BudgetInfo;
   pacing: PacingInfo;
   epoch: string;
+  /** si está presente, es una vista del pasado (replay) y no llegan deltas hasta volver al presente */
+  replayTick?: number;
 }
 
 export interface DeltaMessage {

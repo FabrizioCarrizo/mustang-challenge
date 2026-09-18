@@ -1,6 +1,6 @@
 import type { AgentSummary, DeltaMessage, EventInfo, MetricsPoint, ResourceKind, ServerMessage, SnapshotMessage, SpeechInfo, StructureInfo } from "@genesis/protocol";
 import { RESOURCES } from "@genesis/protocol";
-import type { TickOutput } from "@genesis/engine";
+import type { Engine, TickOutput } from "@genesis/engine";
 import type { Runner } from "./runner.ts";
 import { agentDetail, agentSummary, climateInfo, clockInfo, eventInfo, quantizeCell, quantizeResources, structureInfo, worldInfo } from "./mappers.ts";
 
@@ -8,6 +8,8 @@ export interface WsClient {
   send(data: string): void;
   focusAgentId: number | null;
   alive: boolean;
+  /** si está viendo el pasado, no recibe deltas del presente */
+  replayTick: number | null;
   bufferedAmount?: () => number;
 }
 
@@ -77,7 +79,11 @@ export class Broadcaster {
   }
 
   snapshotMessage(): SnapshotMessage {
-    const e = this.runner.engine;
+    return this.snapshotFrom(this.runner.engine);
+  }
+
+  /** Snapshot de cualquier motor (el vivo o uno de replay). */
+  snapshotFrom(e: Engine): SnapshotMessage {
     const agents: AgentSummary[] = [];
     for (const a of e.s.agents.values()) {
       if (a.diedTick !== null && e.s.tick - a.diedTick > e.config.time.ticksPerDay) continue;
@@ -210,8 +216,12 @@ export class Broadcaster {
     this.milestonesDirty = false;
     this.groupsDirty = false;
     for (const c of this.clients) {
-      if (!c.alive) continue;
-      if (c.bufferedAmount && c.bufferedAmount() > 4_000_000) continue; // cliente saturado: se resincroniza con el próximo snapshot
+      if (!c.alive || c.replayTick !== null) continue;
+      if (c.bufferedAmount && c.bufferedAmount() > 4_000_000) {
+        // cliente saturado: se le manda un snapshot completo cuando se descongestione
+        c.send(JSON.stringify({ t: "notice", level: "warn", text: "conexión saturada: resincronizando" }));
+        continue;
+      }
       let focus: DeltaMessage["focus"] = null;
       if (c.focusAgentId !== null) {
         const a = e.s.agents.get(c.focusAgentId);

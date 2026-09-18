@@ -232,9 +232,19 @@ export async function createHttpServer(runner: Runner, broadcaster: Broadcaster,
     return { ok: true, pacing: runner.pacing() };
   });
 
-  app.post<{ Body: { action: Extract<ClientMessage, { t: "god" }>["action"] } }>("/api/god", async (req, reply) => {
-    if (!ext.god) return reply.code(501).send({ ok: false, message: "los poderes divinos llegan en la fase 5" });
-    return ext.god(req.body.action);
+  app.post<{ Body: { action: Extract<ClientMessage, { t: "god" }>["action"] } }>("/api/god", async (req) => {
+    if (ext.god) return ext.god(req.body.action);
+    return runner.god(req.body.action);
+  });
+
+  app.get<{ Querystring: { tick?: string } }>("/api/replay", async (req, reply) => {
+    const tick = Number(req.query.tick ?? runner.tick);
+    try {
+      const view = await runner.replayView(tick);
+      return { ...broadcaster.snapshotFrom(view.engine), replayTick: view.engine.s.tick };
+    } catch (err) {
+      return reply.code(400).send({ error: (err as Error).message });
+    }
   });
 
   ext.routes?.(app);
@@ -246,6 +256,7 @@ export async function createHttpServer(runner: Runner, broadcaster: Broadcaster,
       },
       focusAgentId: null,
       alive: true,
+      replayTick: null,
       bufferedAmount: () => socket.bufferedAmount,
     };
     broadcaster.addClient(client);
@@ -271,13 +282,29 @@ export async function createHttpServer(runner: Runner, broadcaster: Broadcaster,
           client.focusAgentId = msg.agentId;
           break;
         case "god": {
-          const r = ext.god?.(msg.action) ?? { ok: false, message: "los poderes divinos llegan en la fase 5" };
-          client.send(JSON.stringify({ t: "notice", level: r.ok ? "info" : "warn", text: r.message ?? (r.ok ? "Hecho" : "No se pudo") }));
+          const pending = ext.god ? Promise.resolve(ext.god(msg.action)) : runner.god(msg.action);
+          void pending.then((r) => client.send(JSON.stringify({ t: "notice", level: r.ok ? "info" : "warn", text: r.message ?? (r.ok ? "Hecho" : "No se pudo") })));
           break;
         }
-        case "replay":
-          ext.replay?.(msg.toTick);
+        case "replay": {
+          if (msg.toTick === null) {
+            client.replayTick = null;
+            client.send(JSON.stringify(broadcaster.snapshotMessage()));
+            break;
+          }
+          client.replayTick = msg.toTick;
+          void runner
+            .replayView(msg.toTick)
+            .then((view) => {
+              if (client.replayTick === null) return; // volvió al presente mientras se reconstruía
+              client.send(JSON.stringify({ ...broadcaster.snapshotFrom(view.engine), replayTick: view.engine.s.tick }));
+            })
+            .catch((err: Error) => {
+              client.replayTick = null;
+              client.send(JSON.stringify({ t: "error", message: err.message }));
+            });
           break;
+        }
       }
     });
     socket.on("close", () => {

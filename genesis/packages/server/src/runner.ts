@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
-import type { BudgetInfo, PacingInfo } from "@genesis/protocol";
-import { PACING_PRESETS, Society, type Brain, type Engine, type OpenedWorld, type PersistenceWriter, type TickOutput, type WorldDb } from "@genesis/engine";
+import type { BudgetInfo, GodAction, PacingInfo } from "@genesis/protocol";
+import { PACING_PRESETS, Society, pruneWorld, replayWorld, type Brain, type Engine, type GodResult, type OpenedWorld, type PersistenceWriter, type ReplayResult, type TickOutput, type WorldDb } from "@genesis/engine";
 
 export interface RunnerEvents {
   tick: [TickOutput];
@@ -119,8 +119,35 @@ export class Runner extends EventEmitter<RunnerEvents> {
   takeSnapshot(): void {
     const r = this.writer.snapshot();
     const tpd = this.engine.config.time.ticksPerDay;
-    if (r.tick % (tpd * 7) === 0) this.db.thinSnapshots(7, 7, tpd);
+    if (r.tick % (tpd * 7) === 0) {
+      this.db.thinSnapshots(7, 7, tpd);
+      const report = pruneWorld(this.db, this.engine.config, r.tick);
+      if (report.memoriesFolded || report.eventsDeleted) {
+        this.emit("notice", { level: "info", text: `Poda semanal: ${report.memoriesDeleted} memorias plegadas en ${report.memoriesFolded} resúmenes, ${report.eventsDeleted} eventos triviales borrados` });
+      }
+    }
     this.emit("snapshot", r);
+  }
+
+  /** Aplica un acto divino: en el próximo tick o, si el mundo está en pausa, avanzando un instante. */
+  async god(action: GodAction): Promise<GodResult> {
+    const p = this.engine.god(action);
+    if (this.paused) this.step();
+    const r = await p;
+    this.emit("notice", { level: r.ok ? "info" : "warn", text: r.ok ? `Dios: ${r.message}` : `Dios: no se pudo (${r.message})` });
+    return r;
+  }
+
+  private replayCache: { tick: number; result: ReplayResult } | null = null;
+
+  /** Vista del pasado: el mundo tal como estaba en `tick` (exacto en los snapshots, reconstruido entre ellos). */
+  async replayView(tick: number): Promise<ReplayResult> {
+    const target = Math.max(0, Math.min(this.tick, Math.floor(tick)));
+    if (this.replayCache && this.replayCache.tick === target) return this.replayCache.result;
+    this.writer.flush();
+    const result = await replayWorld(this.db, target, target);
+    this.replayCache = { tick: target, result };
+    return result;
   }
 
   /** Corre N días a máxima velocidad (uso headless), cediendo el hilo para que el cerebro resuelva. */

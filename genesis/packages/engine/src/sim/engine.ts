@@ -1,5 +1,6 @@
-import { RESOURCES, type ResourceKind } from "@genesis/protocol";
+import { RESOURCES, type GodAction, type ResourceKind } from "@genesis/protocol";
 import { createAgent, inv, remember, resetDailyCounters, type Agent } from "../agents/agent.ts";
+import { applyGodAction, type GodResult } from "./god.ts";
 import type { Crime, Punishment } from "../society/laws.ts";
 import { clamp01 } from "../agents/needs.ts";
 import { executeAction, startAction, type ActionContext } from "../cognition/system1/actions.ts";
@@ -67,6 +68,16 @@ export class Engine {
   private structuresChanged = new Set<number>();
   private removedStructures: number[] = [];
   private tickDeaths: number[] = [];
+  private godQueue: Array<{ action: GodAction; resolve: (r: GodResult) => void }> = [];
+
+  /** Encola una acción divina; se aplica al comienzo del próximo tick. */
+  god(action: GodAction): Promise<GodResult> {
+    return new Promise((resolve) => this.godQueue.push({ action, resolve }));
+  }
+
+  get pendingGodActions(): number {
+    return this.godQueue.length;
+  }
   readonly names: NameResolver;
   hooks: EngineHooks = {};
   /** sociedad enganchada (detectores, leyes, crímenes) */
@@ -310,6 +321,13 @@ export class Engine {
 
     if (clock.isNewDay) this.startNewDay();
 
+    // acciones de dios encoladas desde afuera del loop
+    if (this.godQueue.length) {
+      const queue = this.godQueue;
+      this.godQueue = [];
+      for (const { action, resolve } of queue) resolve(applyGodAction(this, action));
+    }
+
     this.hooks.beforeWorld?.(this);
 
     // clima
@@ -429,6 +447,9 @@ export class Engine {
     if (clock.isNewDay) dailyLife(this);
 
     if (s.shelterDirty) this.recomputeShelter();
+
+    // huella diaria del estado, para verificar replays
+    if (clock.isNewDay) this.events.push(makeEvent({ kind: "state.hash", tick: s.tick, label: this.hash(), importance: 0, persist: true }));
 
     const metrics = newHour ? collectMetrics(s) : null;
     const out: TickOutput = {
